@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: kimi-code-server
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 18.18.0
+      - key: KIMI_DEFAULT_MODEL
+        value: deepseek-v4-flash-free
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: KIMI_CODE_PASSWORD
+        sync: false
+      - key: KIMI_PORT
+        value: 58627
