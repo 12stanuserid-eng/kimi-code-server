@@ -1,0 +1,16 @@
+{
+  "name": "kimi-code-server",
+  "version": "1.0.0",
+  "description": "Kimi Code AI Server - 24/7 deployment with auto-restart",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node setup.js"
+  },
+  "dependencies": {
+    "@moonshot-ai/kimi-code": "^0.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
