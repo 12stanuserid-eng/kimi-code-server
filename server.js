@@ -65,18 +65,19 @@ enable_telegram = ${process.env.TELEGRAM_BOT_TOKEN ? 'true' : 'false'}
 let kimiProcess = null;
 let restartCount = 0;
 
-function startKimi() {
-  const kimiBin = findKimiBinary();
-  if (!kimiBin) {
-    console.error('[kimi] Binary not found! Install @moonshot-ai/kimi-code first');
-    process.exit(1);
-  }
+function getKimiCommand() {
+  // Use npx to find the package binary (most reliable)
+  const npxPath = process.env.NPX_PATH || 'npx';
+  return { cmd: npxPath, args: ['@moonshot-ai/kimi-code'] };
+}
 
-  console.log(`[kimi] Starting with binary: ${kimiBin} on port ${PORT}`);
-  
-  kimiProcess = spawn(kimiBin, ['server', '--port', String(PORT)], {
+function startKimi() {
+  const { cmd, args } = getKimiCommand();
+  console.log(`[kimi] Starting: ${cmd} ${args.join(' ')} server --port ${PORT}`);
+
+  kimiProcess = spawn(cmd, [...args, 'server', '--port', String(PORT)], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, HOME, PATH: process.env.PATH }
+    env: { ...process.env, HOME, PATH: process.env.PATH, NODE_PATH: process.cwd() + '/node_modules' }
   });
 
   kimiProcess.stdout.on('data', (data) => {
@@ -96,26 +97,6 @@ function startKimi() {
     console.log(`[kimi] Exited (code=${code}, signal=${signal})`);
     scheduleRestart();
   });
-}
-
-function findKimiBinary() {
-  // Try multiple locations
-  const candidates = [
-    path.join(process.cwd(), 'node_modules', '.bin', 'kimi'),
-    path.join(HOME, '.kimi-code', 'bin', 'kimi'),
-    '/usr/local/bin/kimi',
-    '/usr/bin/kimi'
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  // Try which/where via shell
-  try {
-    const { execSync } = require('child_process');
-    const which = execSync('which kimi 2>/dev/null || echo ""', { encoding: 'utf8' }).trim();
-    if (which) return which;
-  } catch (e) {}
-  return null;
 }
 
 function scheduleRestart() {
