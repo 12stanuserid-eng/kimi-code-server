@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = parseInt(process.env.PORT) || 10000;
+const KIMI_PORT = PORT + 1; // Kimi runs on internal port
 const HOME = process.env.HOME || '/root';
 const KIMI_DIR = path.join(HOME, '.kimi-code');
 const CONFIG_PATH = path.join(KIMI_DIR, 'config.toml');
@@ -24,7 +25,7 @@ function generateConfig() {
 default_model = "opencode-deepseek-v4-flash-free"
 
 [server]
-port = ${PORT}
+port = ${KIMI_PORT}
 host = "0.0.0.0"
 enable_swarm = true
 
@@ -169,7 +170,7 @@ let kimiProcess = null;
 let restartCount = 0;
 
 function startKimi() {
-  const args = ['@moonshot-ai/kimi-code', 'web', '--port', String(PORT), '--host', '0.0.0.0'];
+  const args = ['@moonshot-ai/kimi-code', 'web', '--port', String(KIMI_PORT), '--host', '0.0.0.0'];
   console.log(`[kimi] Starting: npx ${args.join(' ')}`);
 
   kimiProcess = spawn('npx', args, {
@@ -224,10 +225,10 @@ const server = http.createServer((req, res) => {
   // Everything else → proxy to Kimi Code Web UI
   const options = {
     hostname: '127.0.0.1',
-    port: PORT,
+    port: KIMI_PORT,
     path: req.url,
     method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${PORT}` }
+    headers: { ...req.headers, host: `127.0.0.1:${KIMI_PORT}` }
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
