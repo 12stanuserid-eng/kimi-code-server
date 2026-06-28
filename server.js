@@ -10,83 +10,180 @@ const KIMI_DIR = path.join(HOME, '.kimi-code');
 const CONFIG_PATH = path.join(KIMI_DIR, 'config.toml');
 const LOG_DIR = path.join(KIMI_DIR, 'logs');
 
-// Ensure directories exist
+// Ensure directories
 [KIMI_DIR, LOG_DIR].forEach(d => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
 
-// ====== CONFIG.TOML GENERATION ======
+// ====== CONFIG.TOML — OpenCode Zen FREE models ======
 function generateConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    console.log('[config] Generating default config.toml...');
-    const config = `# Kimi Code Config - Generated for Render
+  if (fs.existsSync(CONFIG_PATH)) return;
+  console.log('[config] Generating config.toml with OpenCode Zen free models...');
+
+  const config = `# Kimi Code Config — OpenCode Zen FREE
+default_model = "opencode-deepseek-v4-flash-free"
+
 [server]
 port = ${PORT}
 host = "0.0.0.0"
-max_message_length = 128000
-max_conversation_history = 100
-enable_telemetry = false
-
-[agent]
-default_model = "${process.env.KIMI_DEFAULT_MODEL || 'deepseek-v4-flash-free'}"
-temperature = 0.7
-max_tokens = 4096
 enable_swarm = true
 
-[models]
-  [models.deepseek-v4-flash-free]
-  provider = "openrouter"
-  model = "deepseek/deepseek-v4-flash-free"
-  api_key = "${process.env.OPENAI_API_KEY || ''}"
-  
-  [models.gpt-4o-mini]
-  provider = "openrouter"
-  model = "openai/gpt-4o-mini"
-  api_key = "${process.env.OPENAI_API_KEY || ''}"
+# === OpenCode Zen (FREE — no API key needed) ===
+[providers.opencode]
+type = "openai"
+base_url = "https://opencode.ai/zen/v1"
 
-[provider]
-default = "openrouter"
+[models."opencode-deepseek-v4-flash-free"]
+provider = "opencode"
+model = "deepseek-v4-flash-free"
+max_context_size = 128000
 
-[provider.openrouter]
+[models."opencode-deepseek-v4-flash"]
+provider = "opencode"
+model = "deepseek-v4-flash"
+max_context_size = 128000
+
+[models."opencode-deepseek-v4-pro"]
+provider = "opencode"
+model = "deepseek-v4-pro"
+max_context_size = 128000
+
+[models."opencode-gpt5.5"]
+provider = "opencode"
+model = "gpt-5.5"
+max_context_size = 128000
+
+[models."opencode-gpt5.5-pro"]
+provider = "opencode"
+model = "gpt-5.5-pro"
+max_context_size = 128000
+
+[models."opencode-gpt5.4"]
+provider = "opencode"
+model = "gpt-5.4"
+max_context_size = 128000
+
+[models."opencode-gpt5.4-mini"]
+provider = "opencode"
+model = "gpt-5.4-mini"
+max_context_size = 128000
+
+[models."opencode-gpt5.4-nano"]
+provider = "opencode"
+model = "gpt-5.4-nano"
+max_context_size = 128000
+
+[models."opencode-claude-sonnet-4"]
+provider = "opencode"
+model = "claude-sonnet-4"
+max_context_size = 128000
+
+[models."opencode-claude-haiku-4.5"]
+provider = "opencode"
+model = "claude-haiku-4-5"
+max_context_size = 128000
+
+[models."opencode-gemini-3.5-flash"]
+provider = "opencode"
+model = "gemini-3.5-flash"
+max_context_size = 128000
+
+[models."opencode-kimi-k2.6"]
+provider = "opencode"
+model = "kimi-k2.6"
+max_context_size = 128000
+
+[models."opencode-kimi-k2.5"]
+provider = "opencode"
+model = "kimi-k2.5"
+max_context_size = 128000
+
+[models."opencode-qwen3.6-plus"]
+provider = "opencode"
+model = "qwen3.6-plus"
+max_context_size = 128000
+
+[models."opencode-qwen3.6-plus-free"]
+provider = "opencode"
+model = "qwen3.6-plus-free"
+max_context_size = 128000
+
+[models."opencode-minimax-m3-free"]
+provider = "opencode"
+model = "minimax-m3-free"
+max_context_size = 128000
+
+[models."opencode-nemotron"]
+provider = "opencode"
+model = "nemotron-3-ultra-free"
+max_context_size = 128000
+
+[models."opencode-mimo-v2.5-free"]
+provider = "opencode"
+model = "mimo-v2.5-free"
+max_context_size = 128000
+
+[models."opencode-big-pickle"]
+provider = "opencode"
+model = "big-pickle"
+max_context_size = 128000
+
+[models."opencode-north-mini-code-free"]
+provider = "opencode"
+model = "north-mini-code-free"
+max_context_size = 128000
+
+# === OpenRouter (free tier) ===
+[providers.openrouter]
+type = "openai"
 base_url = "https://openrouter.ai/api/v1"
-api_key = "${process.env.OPENAI_API_KEY || ''}"
+api_key = "${process.env.OPENROUTER_API_KEY || ''}"
 
-[platform]
-enable_rest_api = true
-enable_webhook = false
-enable_telegram = ${process.env.TELEGRAM_BOT_TOKEN ? 'true' : 'false'}
+[models."openrouter-deepseek-v4-flash-free"]
+provider = "openrouter"
+model = "deepseek/deepseek-v4-flash-free"
+max_context_size = 128000
+
+[models."openrouter-gpt-4o-mini"]
+provider = "openrouter"
+model = "openai/gpt-4o-mini"
+max_context_size = 128000
+
+[models."openrouter-claude-sonnet-4"]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4"
+max_context_size = 128000
+
+[models."openrouter-gemini-2.5-flash"]
+provider = "openrouter"
+model = "google/gemini-2.5-flash"
+max_context_size = 128000
 `;
-    fs.writeFileSync(CONFIG_PATH, config);
-    console.log('[config] Config written to', CONFIG_PATH);
-  }
+
+  fs.writeFileSync(CONFIG_PATH, config);
+  console.log('[config] Written to', CONFIG_PATH);
 }
 
-// ====== KIMI PROCESS MANAGER ======
+// ====== KIMI PROCESS ======
 let kimiProcess = null;
 let restartCount = 0;
 
-function getKimiCommand() {
-  // Use npx to find the package binary (most reliable)
-  const npxPath = process.env.NPX_PATH || 'npx';
-  return { cmd: npxPath, args: ['@moonshot-ai/kimi-code'] };
-}
-
 function startKimi() {
-  const { cmd, args } = getKimiCommand();
-  console.log(`[kimi] Starting: ${cmd} ${args.join(' ')} server --port ${PORT}`);
+  const args = ['@moonshot-ai/kimi-code', 'web', '--port', String(PORT), '--host', '0.0.0.0'];
+  console.log(`[kimi] Starting: npx ${args.join(' ')}`);
 
-  kimiProcess = spawn(cmd, [...args, 'server', '--port', String(PORT)], {
+  kimiProcess = spawn('npx', args, {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, HOME, PATH: process.env.PATH, NODE_PATH: process.cwd() + '/node_modules' }
+    env: {
+      ...process.env,
+      HOME,
+      PATH: process.env.PATH,
+      NODE_PATH: process.cwd() + '/node_modules'
+    }
   });
 
-  kimiProcess.stdout.on('data', (data) => {
-    process.stdout.write(`[kimi] ${data}`);
-  });
-
-  kimiProcess.stderr.on('data', (data) => {
-    process.stderr.write(`[kimi:err] ${data}`);
-  });
+  kimiProcess.stdout.on('data', (data) => process.stdout.write(`[kimi] ${data}`));
+  kimiProcess.stderr.on('data', (data) => process.stderr.write(`[kimi:err] ${data}`));
 
   kimiProcess.on('error', (err) => {
     console.error(`[kimi] Launch error: ${err.message}`);
@@ -101,61 +198,62 @@ function startKimi() {
 
 function scheduleRestart() {
   restartCount++;
-  const delay = Math.min(5000, 1000 * restartCount);
+  const delay = Math.min(10000, 2000 * restartCount);
   console.log(`[kimi] Restart #${restartCount} in ${delay}ms...`);
   setTimeout(startKimi, delay);
 }
 
-// ====== HEALTH SERVER ======
-const healthServer = http.createServer((req, res) => {
-  const respond = (code, data) => {
-    res.writeHead(code, {
+// ====== PROXY SERVER ======
+const server = http.createServer((req, res) => {
+  // Health endpoint
+  if (req.url === '/health') {
+    const alive = kimiProcess && kimiProcess.exitCode === null;
+    res.writeHead(alive ? 200 : 503, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*'
     });
-    res.end(JSON.stringify(data));
-  };
-
-  if (req.url === '/health') {
-    const alive = kimiProcess && kimiProcess.exitCode === null;
-    respond(alive ? 200 : 503, {
+    res.end(JSON.stringify({
       status: alive ? 'healthy' : 'unhealthy',
       kimi_alive: alive,
       restarts: restartCount,
       uptime: process.uptime()
-    });
-  } else if (req.url === '/') {
-    respond(200, {
-      service: 'kimi-code-server',
-      version: '1.0.0',
-      status: kimiProcess && kimiProcess.exitCode === null ? 'running' : 'restarting',
-      restarts: restartCount
-    });
-  } else {
-    // Proxy to kimi
-    const options = {
-      hostname: 'localhost',
-      port: PORT,
-      path: req.url,
-      method: req.method,
-      headers: req.headers
-    };
-    const proxy = http.request(options, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(res);
-    });
-    proxy.on('error', () => respond(502, { error: 'kimi unavailble' }));
-    req.pipe(proxy);
+    }));
+    return;
   }
+
+  // Everything else → proxy to Kimi Code Web UI
+  const options = {
+    hostname: '127.0.0.1',
+    port: PORT,
+    path: req.url,
+    method: req.method,
+    headers: { ...req.headers, host: `127.0.0.1:${PORT}` }
+  };
+
+  const proxyReq = http.request(options, (proxyRes) => {
+    // Copy all headers (including content-type for HTML/JS/CSS)
+    const headers = { ...proxyRes.headers };
+    delete headers['transfer-encoding']; // let Node handle chunking
+    res.writeHead(proxyRes.statusCode, headers);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', () => {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end('Kimi Code starting...');
+  });
+
+  req.pipe(proxyReq);
 });
 
 // ====== MAIN ======
 generateConfig();
 startKimi();
 
-healthServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`[server] Health + proxy server on :${PORT}`);
-  console.log(`[server] Health check: /health`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[server] Kimi Code Web + proxy on :${PORT}`);
+  console.log(`[server] URL: http://0.0.0.0:${PORT}`);
+  console.log(`[server] Health: /health`);
 });
 
 // Graceful shutdown
@@ -163,7 +261,7 @@ function shutdown(signal) {
   console.log(`[server] ${signal} received, graceful shutdown...`);
   if (kimiProcess) {
     kimiProcess.kill('SIGTERM');
-    setTimeout(() => process.exit(0), 3000);
+    setTimeout(() => process.exit(0), 5000);
   } else {
     process.exit(0);
   }
