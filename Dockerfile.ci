@@ -8,11 +8,10 @@ RUN cargo build --release && cp target/release/pentaract /pentaract
 
 # Stage 2: Build UI
 FROM node:22-slim AS ui
+ENV PNPM_APPROVE_BUILDS=true
 WORKDIR /app
 COPY ui/package.json ui/pnpm-lock.yaml* ./
-RUN npm install -g pnpm \
- && pnpm config set approve-builds true \
- && pnpm i
+RUN npm install -g pnpm && pnpm i
 COPY ui .
 RUN VITE_API_BASE=/api pnpm run build
 
