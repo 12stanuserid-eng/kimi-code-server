@@ -86,8 +86,8 @@ function startKimi() {
 
   // Use 'web' command — runs in background (daemon mode)
   const args = kimiBin === 'npx'
-    ? ['@moonshot-ai/kimi-code', 'web', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--no-open']
-    : ['web', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--no-open'];
+    ? ['@moonshot-ai/kimi-code', 'web', '--port', String(KIMI_PORT), '--no-open']
+    : ['web', '--port', String(KIMI_PORT), '--no-open'];
 
   log(`Starting: ${kimiBin} ${args.join(' ')}`);
 
