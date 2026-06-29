@@ -1,0 +1,23 @@
+# Build Tarpaulin (UI)
+FROM node:21-slim AS ui
+WORKDIR /app
+COPY ./ui/package.json ./ui/pnpm-lock.yaml* ./ui/
+RUN npm install -g pnpm && pnpm i
+COPY ./ui .
+RUN VITE_API_BASE=/api pnpm run build
+
+# Build Pentaract (Rust backend)
+FROM rust:latest AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+COPY ./pentaract .
+RUN cargo build --release && cp target/release/pentaract /pentaract
+
+# Runtime
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /pentaract /pentaract
+COPY --from=ui /app/dist /ui
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+EXPOSE 8000
+ENTRYPOINT ["/pentaract"]
