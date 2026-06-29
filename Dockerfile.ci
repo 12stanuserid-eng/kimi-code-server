@@ -7,7 +7,7 @@ COPY pentaract .
 RUN cargo build --release && cp target/release/pentaract /pentaract
 
 # Stage 2: Build UI
-FROM node:21-slim AS ui
+FROM node:22-slim AS ui
 WORKDIR /app
 COPY ui/package.json ui/pnpm-lock.yaml* ./
 RUN npm install -g pnpm && pnpm i
