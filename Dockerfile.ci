@@ -1,19 +1,20 @@
-# Build Tarpaulin (UI)
-FROM node:21-slim AS ui
-WORKDIR /app
-COPY ./ui/package.json ./ui/pnpm-lock.yaml* ./ui/
-RUN npm install -g pnpm && pnpm i
-COPY ./ui .
-RUN VITE_API_BASE=/api pnpm run build
-
-# Build Pentaract (Rust backend)
+# Pentaract - CI build for ghcr.io
+# Stage 1: Build Rust binary
 FROM rust:latest AS builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
-COPY ./pentaract .
+COPY pentaract .
 RUN cargo build --release && cp target/release/pentaract /pentaract
 
-# Runtime
+# Stage 2: Build UI
+FROM node:21-slim AS ui
+WORKDIR /app
+COPY ui/package.json ui/pnpm-lock.yaml* ./
+RUN npm install -g pnpm && pnpm i
+COPY ui .
+RUN VITE_API_BASE=/api pnpm run build
+
+# Stage 3: Runtime
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /pentaract /pentaract
