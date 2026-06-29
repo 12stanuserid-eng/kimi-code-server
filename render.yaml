@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: pentaract
+    env: docker
+    repo: https://github.com/12stanuserid-eng/kimi-code-server
+    branch: pentaract-deploy
+    dockerfilePath: ./Dockerfile.ci
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: WORKERS
+        value: 1
+      - key: CHANNEL_CAPACITY
+        value: 100
+      - key: DATABASE_HOST
+        fromService:
+          type: postgres
+          name: pentaract-db
+          property: host
+      - key: DATABASE_PORT
+        value: 5432
+      - key: DATABASE_NAME
+        fromService:
+          type: postgres
+          name: pentaract-db
+          property: database
+      - key: DATABASE_USER
+        fromService:
+          type: postgres
+          name: pentaract-db
+          property: user
+      - key: DATABASE_PASSWORD
+        fromService:
+          type: postgres
+          name: pentaract-db
+          property: password
+      - key: SECRET_KEY
+        generateValue: 64
+      - key: SUPERUSER_EMAIL
+        value: pentaract@pentaract.pentaract
+      - key: SUPERUSER_PASS
+        value: pentaract
+      - key: ACCESS_TOKEN_EXPIRE_IN_SECS
+        value: "3600"
+      - key: REFRESH_TOKEN_EXPIRE_IN_DAYS
+        value: "30"
+      - key: RUST_LOG
+        value: info
+      - key: TELEGRAM_API_BASE_URL
+        value: https://api.telegram.org
+
+databases:
+  - name: pentaract-db
+    databaseName: pentaract
+    region: oregon
+    plan: free
+    ipAllowList: []
