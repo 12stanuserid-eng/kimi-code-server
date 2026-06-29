@@ -14,6 +14,8 @@ const { spawn } = require('child_process');
 const path = require('path');
 const net = require('net');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 
 const PORT = parseInt(process.env.PORT) || 10000;
 const KIMI_PORT = PORT + 1;
@@ -63,8 +65,29 @@ function startKeepalive() {
   log('✅ Keepalive enabled (4min interval, HTTPS)');
 }
 
+const FIXED_TOKEN = 'VNE1wpc7gqGD1THY-Np6WRPYdU5LlOrk3ICvxsy_N58';
+
+// ====== ENSURE FIXED TOKEN FILE ======
+function ensureFixedToken() {
+  const kimiHome = process.env['KIMI_CODE_HOME'] || path.join(os.homedir(), '.kimi-code');
+  const tokenPath = path.join(kimiHome, 'server.token');
+  try { fs.mkdirSync(kimiHome, { recursive: true }); } catch(e) {}
+  try {
+    const existing = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (existing === FIXED_TOKEN) {
+      log(`🔑 Token file OK: ${tokenPath}`);
+      return;
+    }
+  } catch(e) {}
+  // Write fixed token to file
+  fs.writeFileSync(tokenPath, FIXED_TOKEN, { mode: 0o600 });
+  log(`🔑 Fixed token written: ${tokenPath}`);
+}
+
 // ====== START KIMI ======
 function startKimi() {
+  // Ensure fixed token before starting kimi
+  ensureFixedToken();
   // Find kimi binary
   const kimiBin = ['node_modules/.bin/kimi', 'node_modules/@moonshot-ai/kimi-code/dist/main.mjs']
     .map(p => path.join(__dirname, p))
@@ -74,7 +97,7 @@ function startKimi() {
   const kimiEnv = {
     ...process.env,
     HOME: process.env.HOME || '/root',
-    KIMI_CODE_PASSWORD: process.env.KIMI_CODE_PASSWORD || 'K0IBAsQFzu7GSLIe',
+    KIMI_CODE_PASSWORD: process.env.KIMI_CODE_PASSWORD || FIXED_TOKEN,
   };
 
   // Use `server run --foreground` — never daemonizes, process stays alive
