@@ -41,14 +41,14 @@ async fn main() {
 
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());
 
-    // creating db
-    create_db(
-        &config.db_uri_without_dbname,
-        &config.db_name,
-        config.workers.into(),
-        time::Duration::from_secs(30),
-    )
-    .await;
+    // creating db (skipped — use existing database)
+    // create_db(
+    //     &config.db_uri_without_dbname,
+    //     &config.db_name,
+    //     config.workers.into(),
+    //     time::Duration::from_secs(30),
+    // )
+    // .await;
 
     // set up connection pool
     let db = get_pool(
