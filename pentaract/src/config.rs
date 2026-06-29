@@ -29,9 +29,9 @@ impl Config {
         let db_host: String = Self::get_env_var("DATABASE_HOST")?;
         let db_port: String = Self::get_env_var("DATABASE_PORT")?;
         let db_uri =
-            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}") };
+            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode=require") };
         let db_uri_without_dbname =
-            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}") };
+            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode=require") };
         let port = Self::get_env_var("PORT")?;
         let workers = Self::get_env_var("WORKERS")?;
         let channel_capacity = Self::get_env_var("CHANNEL_CAPACITY")?;
