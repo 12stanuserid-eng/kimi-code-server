@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 /**
- * Kimi Code Render Server
- * - HTTP server starts IMMEDIATELY (Render health check passes)
- * - Debug info at /kimi-debug
- * - Proxy to Kimi on KIMI_PORT when ready
+ * Kimi Code Render Server v2
+ * - HTTP server starts IMMEDIATELY ✅
+ * - Kimi runs via 'web' command (daemon mode)
+ * - daemon keeps running after parent exits — NO restart on code=0
+ * - Health check: actually connect to daemon port
  */
+
 const http = require('http');
 const { spawn } = require('child_process');
 const path = require('path');
+const net = require('net');
 
 const PORT = parseInt(process.env.PORT) || 10000;
 const KIMI_PORT = PORT + 1;
 
 let debugLog = [];
 let kimiReady = false;
-let kimiProcess = null;
+let kimiSpawned = false;
+let healthTimer = null;
 
 function log(m) {
   const line = `[${new Date().toISOString()}] ${m}`;
@@ -29,37 +33,50 @@ const STARTING_HTML = `<!DOCTYPE html><html><head>
 <div><h2>🪐 Kimi Code</h2><p>Loading Kimi Code Interface...</p><p class="info">Server will be ready shortly</p>
 <script>setTimeout(()=>location.reload(),3000)</script></div></body></html>`;
 
-// ====== HTTP SERVER - starts IMMEDIATELY ======
-const server = http.createServer((req, res) => {
-  if (req.url === '/kimi-debug') {
-    res.writeHead(200, {'Content-Type': 'text/plain'});
-    res.end(debugLog.join('\n'));
-    return;
-  }
-  if (req.url === '/health') {
-    res.writeHead(200, {'Content-Type': 'application/json'});
-    res.end(JSON.stringify({status: kimiReady ? 'healthy' : 'starting', kimi_alive: kimiReady}));
-    return;
-  }
-  if (kimiReady && kimiProcess && !kimiProcess.killed) {
-    const opts = {hostname:'127.0.0.1', port:KIMI_PORT, path:req.url, method:req.method,
-      headers:{...req.headers, host:`127.0.0.1:${KIMI_PORT}`, connection:'close'}};
-    const pr = http.request(opts, (prRes) => {
-      res.writeHead(prRes.statusCode, prRes.headers);
-      prRes.pipe(res);
-    });
-    pr.on('error', () => { res.writeHead(200,{'Content-Type':'text/html'}); res.end(STARTING_HTML); });
-    req.pipe(pr);
-    return;
-  }
-  res.writeHead(200, {'Content-Type': 'text/html'});
-  res.end(STARTING_HTML);
-});
+// ====== REAL HEALTH CHECK: try connecting to daemon ======
+let daemonAlive = false;
 
-// ====== KIMI STARTUP ======
-function startKimi() {
+function checkDaemon(callback) {
+  const sock = new net.Socket();
+  sock.setTimeout(3000);
+  sock.on('connect', () => {
+    sock.destroy();
+    daemonAlive = true;
+    kimiReady = true;
+    if (callback) callback(true);
+  });
+  sock.on('error', () => {
+    sock.destroy();
+    daemonAlive = false;
+    if (callback) callback(false);
+  });
+  sock.on('timeout', () => {
+    sock.destroy();
+    daemonAlive = false;
+    if (callback) callback(false);
+  });
+  sock.connect(KIMI_PORT, '127.0.0.1');
+}
+
+// Check daemon every 10 seconds
+function startHealthCheck() {
+  if (healthTimer) clearInterval(healthTimer);
+  healthTimer = setInterval(() => {
+    checkDaemon((alive) => {
+      if (!alive && kimiSpawned) {
+        log('Daemon not responding, triggering restart...');
+        spawnKimi();
+      }
+    });
+  }, 10000);
+}
+
+// ====== KIMI DAEMON SPAWN ======
+let kimiSpawnCount = 0;
+
+function spawnKimi() {
   const fs = require('fs');
-  const binDir = path.join(__dirname, 'node_modules', '.bin');
+  kimiSpawnCount++;
 
   // Check for kimi binary
   const kimiPaths = [
@@ -71,86 +88,131 @@ function startKimi() {
   for (const p of kimiPaths) {
     if (fs.existsSync(p)) {
       kimiBin = p;
-      log(`Found kimi: ${p}`);
-      try {
-        if (fs.lstatSync(p).isSymbolicLink()) log(`  -> ${fs.readlinkSync(p)}`);
-      } catch(e) {}
+      log(`[spawn #${kimiSpawnCount}] Found: ${p}`);
+      try { if (fs.lstatSync(p).isSymbolicLink()) log(`  -> ${fs.readlinkSync(p)}`); } catch(e) {}
       break;
     }
   }
 
   if (!kimiBin) {
-    log('kimi binary not found - using npx');
+    log('[spawn] binary not found, using npx');
     kimiBin = 'npx';
   }
 
-  // Use 'web' command — runs in background (daemon mode)
   const args = kimiBin === 'npx'
     ? ['@moonshot-ai/kimi-code', 'web', '--port', String(KIMI_PORT), '--no-open']
     : ['web', '--port', String(KIMI_PORT), '--no-open'];
 
-  log(`Starting: ${kimiBin} ${args.join(' ')}`);
+  log(`[spawn] Running: ${kimiBin} ${args.join(' ')}`);
 
-  kimiProcess = spawn(kimiBin, args, {
+  // Kill previous process if any
+  if (kimiProcess && !kimiProcess.killed) {
+    try { kimiProcess.kill('SIGTERM'); } catch(e) {}
+  }
+
+  const proc = spawn(kimiBin, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {...process.env, HOME: process.env.HOME || '/root'},
     cwd: __dirname,
     shell: kimiBin === 'npx'
   });
 
+  kimiProcess = proc;
+  kimiSpawned = true;
+
   let stdoutBuf = '';
   let stderrBuf = '';
 
-  kimiProcess.stdout.on('data', (d) => {
+  proc.stdout.on('data', (d) => {
     const text = d.toString();
     stdoutBuf += text;
     process.stdout.write(`[kimi] ${text}`);
-    // Check for ready signals
-    if (text.includes('Kimi server') || text.includes('ready') || text.includes('http') || text.includes('healthy') || text.includes('listening')) {
-      if (!kimiReady) {
-        kimiReady = true;
-        log('Kimi is READY!');
-      }
-    }
+    // Daemon is spawned — mark as potentially ready
+    // The actual readiness is confirmed by checkDaemon
   });
 
-  kimiProcess.stderr.on('data', (d) => {
+  proc.stderr.on('data', (d) => {
     const text = d.toString();
     stderrBuf += text;
-    log(`Kimi stderr: ${text.substring(0, 200)}`);
+    const snippet = text.substring(0, 200);
+    log(`[kimi:err] ${snippet}`);
     process.stderr.write(`[kimi:err] ${text}`);
-    if (text.includes('Kimi server') || text.includes('ready') || text.includes('http') || text.includes('healthy') || text.includes('listening')) {
-      if (!kimiReady) {
-        kimiReady = true;
-        log('Kimi is READY!');
-      }
+  });
+
+  proc.on('error', (err) => {
+    log(`[spawn] Error: ${err.message}`);
+  });
+
+  proc.on('exit', (code, sig) => {
+    log(`[spawn] Exited (code=${code}, signal=${sig})`);
+    log(`[spawn] last stdout: ${stdoutBuf.substring(stdoutBuf.length - 200)}`);
+    if (stderrBuf) log(`[spawn] last stderr: ${stderrBuf.substring(stderrBuf.length - 300)}`);
+
+    // code=0 is NORMAL — web command exits after spawning daemon
+    // Daemon keeps running independently
+    if (code === 0) {
+      log('[spawn] code=0: daemon started, parent exiting normally');
+      // Don't clear kimiReady — daemon should be alive
+      // But verify with health check
+      setTimeout(() => checkDaemon(), 2000);
+      return;
     }
+
+    // Non-zero exit: daemon failed to start — restart
+    if (proc === kimiProcess) {
+      kimiProcess = null;
+    }
+    log(`[spawn] Daemon start failed, retrying in 5s...`);
+    setTimeout(spawnKimi, 5000);
   });
 
-  kimiProcess.on('error', (err) => {
-    log(`Kimi error: ${err.message}`);
-  });
-
-  kimiProcess.on('exit', (code, sig) => {
-    log(`Kimi exited (code=${code}, signal=${sig})`);
-    log(`Kimi last stdout: ${stdoutBuf.substring(stdoutBuf.length - 300)}`);
-    log(`Kimi last stderr: ${stderrBuf.substring(stderrBuf.length - 500)}`);
-    kimiReady = false;
-    kimiProcess = null;
-    // Restart after delay
-    log('Scheduling restart in 5s...');
-    setTimeout(startKimi, 5000);
-  });
+  // Check daemon after reasonable startup time
+  setTimeout(() => checkDaemon(), 5000);
 }
+
+// ====== HTTP SERVER ======
+const server = http.createServer((req, res) => {
+  if (req.url === '/kimi-debug') {
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    res.end(debugLog.join('\n'));
+    return;
+  }
+  if (req.url === '/health') {
+    const alive = daemonAlive;
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({status: alive ? 'healthy' : 'starting', kimi_alive: alive}));
+    return;
+  }
+
+  // Proxy to daemon if alive
+  if (daemonAlive) {
+    const opts = {hostname:'127.0.0.1', port:KIMI_PORT, path:req.url, method:req.method,
+      headers:{...req.headers, host:`127.0.0.1:${KIMI_PORT}`, connection:'close'}};
+    const pr = http.request(opts, (prRes) => {
+      res.writeHead(prRes.statusCode, prRes.headers);
+      prRes.pipe(res);
+    });
+    pr.on('error', () => {
+      daemonAlive = false;
+      res.writeHead(200,{'Content-Type':'text/html'});
+      res.end(STARTING_HTML);
+    });
+    req.pipe(pr);
+    return;
+  }
+
+  res.writeHead(200, {'Content-Type': 'text/html'});
+  res.end(STARTING_HTML);
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   log(`Server listening on :${PORT}`);
-  // Start Kimi after server is up (non-blocking)
-  setImmediate(startKimi);
+  startHealthCheck();
+  spawnKimi();
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-  if (kimiProcess) kimiProcess.kill('SIGTERM');
-  setTimeout(() => process.exit(0), 3000);
+  if (kimiProcess && !kimiProcess.killed) kimiProcess.kill('SIGTERM');
+  if (healthTimer) clearInterval(healthTimer);
+  setTimeout(() => process.exit(0), 2000);
 });
