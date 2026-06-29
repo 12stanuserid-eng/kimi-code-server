@@ -1,77 +1,137 @@
 #!/usr/bin/env node
 /**
- * Kimi Code Server — Render-deployed, foreground mode
- * Runs Kimi in --foreground so Render keeps it alive.
+ * Kimi Code — Proxy Server for Render
+ * - Proxy listens on PORT (Render's port), immediate 200 for health checks
+ * - Kimi runs on KIMI_PORT (PORT+1) in foreground mode
+ * - Smart proxy: returns "starting" page (200 OK) until Kimi is ready
  */
 
-const { spawn, execSync } = require('child_process');
 const http = require('http');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = parseInt(process.env.PORT) || 10000;
-const HEALTH_PORT = PORT + 1;
+const KIMI_PORT = PORT + 1;
+const HOME = process.env.HOME || '/root';
+const KIMI_DIR = path.join(HOME, '.kimi-code');
+const CONFIG_PATH = path.join(KIMI_DIR, 'config.toml');
+const LOG_DIR = path.join(KIMI_DIR, 'logs');
 
-// Find kimi binary
-function findKimi() {
-  const paths = [
-    'node_modules/.bin/kimi',
-    'node_modules/@moonshot-ai/kimi-code/dist/main.mjs',
-    '/usr/local/bin/kimi',
-    '/usr/bin/kimi'
-  ];
-  for (const p of paths) {
-    try { require('fs').accessSync(p); return p; }
-    catch(e) { /* not here */ }
-  }
-  try {
-    const r = execSync('which kimi 2>/dev/null || echo ""', {encoding:'utf8'});
-    if (r.trim()) return r.trim();
-  } catch(e) {}
-  return 'npx'; // fallback
+[KIMI_DIR, LOG_DIR].forEach(d => {
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+});
+
+// "Starting page" HTML — shows until Kimi is ready
+const STARTING_PAGE = `<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kimi Code — Starting...</title>
+<style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0f0f0f;color:#e0e0e0}div{text-align:center}.spinner{width:40px;height:40px;border:4px solid #333;border-top:4px solid #6c5ce7;border-radius:50%;animation:spin .8s linear infinite;margin:20px auto}@keyframes spin{to{transform:rotate(360deg)}}h2{color:#6c5ce7}p{color:#888;font-size:14px}</style></head><body>
+<div class="spinner"></div><h2>Kimi Code</h2><p>Server is starting... please wait a moment.</p>
+<script>setTimeout(()=>location.reload(),5000)</script></body></html>`;
+
+// ====== KIMI PROCESS ======
+let kimiReady = false;
+let kimiProcess = null;
+let restartCount = 0;
+
+function startKimi() {
+  const kimiBin = path.join(__dirname, 'node_modules', '.bin', 'kimi');
+  const binExists = fs.existsSync(kimiBin);
+  
+  const cmd = binExists ? kimiBin : 'npx';
+  const args = binExists
+    ? ['server', 'run', '--foreground', '--port', String(KIMI_PORT), '--host', '0.0.0.0']
+    : ['@moonshot-ai/kimi-code', 'server', 'run', '--foreground', '--port', String(KIMI_PORT), '--host', '0.0.0.0'];
+
+  console.log(`[kimi] Starting: ${cmd} ${args.join(' ')}`);
+  
+  kimiReady = false;
+  
+  kimiProcess = spawn(cmd, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, HOME },
+    cwd: __dirname,
+    shell: !binExists
+  });
+
+  kimiProcess.stdout.on('data', (d) => {
+    const text = d.toString();
+    process.stdout.write(`[kimi] ${text}`);
+    // Kimi prints a ready banner when healthy
+    if (text.includes('Kimi server') || text.includes('ready') || text.includes('health') || text.includes('http')) {
+      kimiReady = true;
+      console.log('[proxy] Kimi is READY!');
+    }
+  });
+  kimiProcess.stderr.on('data', (d) => process.stderr.write(`[kimi:err] ${d}`));
+
+  kimiProcess.on('error', (err) => {
+    console.error(`[kimi] error: ${err.message}`);
+    kimiReady = false;
+    setTimeout(startKimi, 3000);
+  });
+  kimiProcess.on('exit', (code, signal) => {
+    console.log(`[kimi] exited (${code}, ${signal})`);
+    kimiReady = false;
+    restartCount++;
+    setTimeout(startKimi, Math.min(10000, 3000 * Math.min(restartCount, 5)));
+  });
 }
 
-const kimiBin = findKimi();
-console.log(`[kimi] bin: ${kimiBin}`);
+// ====== PROXY ======
+function handleRequest(req, res) {
+  // /health endpoint
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({
+      status: kimiReady ? 'healthy' : 'starting',
+      kimi_alive: kimiReady,
+      restarts: restartCount,
+      uptime: process.uptime()
+    }));
+    return;
+  }
 
-// Health server
-http.createServer((req, res) => {
-  const alive = kimi && kimi.exitCode === null && !kimi.killed;
-  res.writeHead(alive ? 200 : 503, {'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*'});
-  res.end(JSON.stringify({
-    status: alive ? 'healthy' : 'unhealthy',
-    kimi_alive: alive,
-    uptime: process.uptime(),
-    port: PORT
-  }));
-}).listen(HEALTH_PORT, '0.0.0.0', () => {
-  console.log(`[health] on ${HEALTH_PORT}`);
+  // If Kimi is ready, proxy to it
+  if (kimiReady) {
+    const opts = {
+      hostname: '127.0.0.1',
+      port: KIMI_PORT,
+      path: req.url,
+      method: req.method,
+      headers: { ...req.headers, host: `127.0.0.1:${KIMI_PORT}`, connection: 'close' }
+    };
+    const proxyReq = http.request(opts, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res);
+    });
+    proxyReq.on('error', () => {
+      res.writeHead(502, { 'Content-Type': 'text/html' });
+      res.end(STARTING_PAGE);
+    });
+    req.pipe(proxyReq);
+    return;
+  }
+
+  // Kimi not ready — show starting page with 200 OK
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(STARTING_PAGE);
+}
+
+// ====== MAIN ======
+const server = http.createServer(handleRequest);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[proxy] listening on :${PORT}`);
+  console.log(`[proxy] Kimi on :${KIMI_PORT}`);
+  startKimi();
 });
 
-// Use --foreground so the process stays alive (no daemonization)
-const args = kimiBin === 'npx'
-  ? ['@moonshot-ai/kimi-code', 'server', 'run', '--foreground', '--port', String(PORT), '--host', '0.0.0.0']
-  : ['server', 'run', '--foreground', '--port', String(PORT), '--host', '0.0.0.0'];
-
-console.log(`[kimi] starting: ${kimiBin} ${args.join(' ')}`);
-
-const kimi = spawn(kimiBin, args, {
-  stdio: ['ignore', 'inherit', 'inherit'],
-  env: { ...process.env, UV_USE_IO_URING: '0' },
-  shell: true
-});
-
-kimi.on('error', (err) => {
-  console.error(`[kimi] error: ${err.message}`);
-  setTimeout(() => process.exit(1), 2000);
-});
-
-kimi.on('exit', (code, signal) => {
-  console.log(`[kimi] exited (code=${code}, signal=${signal})`);
-  if (code !== 0) setTimeout(() => process.exit(1), 5000);
-});
-
-process.on('SIGTERM', () => {
-  console.log('[kimi] SIGTERM');
-  kimi.kill('SIGTERM');
-  setTimeout(() => process.exit(0), 3000);
-});
+// Graceful shutdown
+function shutdown(signal) {
+  console.log(`[server] ${signal}, shutting down...`);
+  if (kimiProcess) kimiProcess.kill('SIGTERM');
+  setTimeout(() => process.exit(0), 5000);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
