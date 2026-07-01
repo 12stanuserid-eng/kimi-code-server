@@ -20,6 +20,18 @@ pub struct Config {
     pub telegram_rate_limit: u8,
 }
 
+/// Percent-encode special characters in a database password for use in a URI.
+fn encode_uri_password(password: &str) -> String {
+    password
+        .replace('%', "%25")
+        .replace('@', "%40")
+        .replace(':', "%3A")
+        .replace('/', "%2F")
+        .replace('?', "%3F")
+        .replace('#', "%23")
+        .replace(' ', "%20")
+}
+
 /// Extract the database name from a postgres:// connection URL.
 fn extract_db_name_from_url(url: &str) -> String {
     // URL format: postgres://user:pass@host:port/dbname?params
@@ -49,7 +61,7 @@ impl Config {
             (database_url, name)
         } else {
             let db_user: String = Self::get_env_var("DATABASE_USER")?;
-            let db_password: String = Self::get_env_var("DATABASE_PASSWORD")?;
+            let db_password: String = encode_uri_password(&Self::get_env_var::<String>("DATABASE_PASSWORD")?);
             let db_name: String = Self::get_env_var("DATABASE_NAME")?;
             let db_host: String = Self::get_env_var("DATABASE_HOST")?;
             let db_port: String = Self::get_env_var("DATABASE_PORT")?;
