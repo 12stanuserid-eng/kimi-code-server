@@ -27,15 +27,9 @@ impl<'t> TelegramBotApi<'t> {
         chat_id: ChatId,
         storage_id: Uuid,
     ) -> PentaractResult<UploadSchema> {
-        let chat_id = {
-            // inserting 100 between minus sign and chat id
-            // cause telegram devs are complete retards and it works this way only
-            //
-            // https://stackoverflow.com/a/65965402/12255756
-
-            let n = chat_id.abs().checked_ilog10().unwrap_or(0) + 1;
-            chat_id - (100 * ChatId::from(10).pow(n))
-        };
+        // chat_id is already in the correct Telegram format (e.g., -1003998671748)
+        // with the -100 prefix for supergroups/channels, so we use it directly.
+        // The transformation formula from StackOverflow is for raw IDs without the prefix.
 
         let token = self.scheduler.get_token(storage_id).await?;
         let url = self.build_url("", "sendDocument", token);
