@@ -32,12 +32,12 @@ impl Config {
         let db_ssl_mode = Self::get_env_var_with_default("DATABASE_SSL_MODE", "require".to_string())?;
         let db_uri = {
             format!(
-                "postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
+                "host={db_host} port={db_port} user={db_user} password={db_password} dbname={db_name} sslmode={db_ssl_mode}"
             )
         };
         let db_uri_without_dbname = {
             format!(
-                "postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
+                "host={db_host} port={db_port} user={db_user} password={db_password} sslmode={db_ssl_mode}"
             )
         };
         let port = Self::get_env_var("PORT")?;
