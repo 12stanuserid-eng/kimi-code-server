@@ -2,6 +2,26 @@ use std::{env, str::FromStr};
 
 use super::errors::{PentaractError, PentaractResult};
 
+/// Percent-encode special characters in a string for safe inclusion in a URI.
+/// This is needed because the database password may contain characters like `@`
+/// that break URI parsing when used directly in the `postgres://` connection string.
+fn url_encode_password(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            // Unreserved characters per RFC 3986
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(byte as char);
+            }
+            // Everything else gets percent-encoded
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub db_uri: String,
@@ -30,14 +50,15 @@ impl Config {
         let db_host: String = Self::get_env_var("DATABASE_HOST")?;
         let db_port: String = Self::get_env_var("DATABASE_PORT")?;
         let db_ssl_mode = Self::get_env_var_with_default("DATABASE_SSL_MODE", "require".to_string())?;
+        let encoded_password = url_encode_password(&db_password);
         let db_uri = {
             format!(
-                "host={db_host} port={db_port} user={db_user} password={db_password} dbname={db_name} sslmode={db_ssl_mode}"
+                "postgres://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
             )
         };
         let db_uri_without_dbname = {
             format!(
-                "host={db_host} port={db_port} user={db_user} password={db_password} sslmode={db_ssl_mode}"
+                "postgres://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
             )
         };
         let port = Self::get_env_var("PORT")?;
