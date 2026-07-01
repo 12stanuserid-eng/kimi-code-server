@@ -1,12 +1,12 @@
-# Pentaract - Self-contained build (no external registry needed)
-# Stage 1: Build Rust binary with limited parallelism
-FROM rust:1.75-slim-bookworm AS builder
-WORKDIR /app/pentaract
+# Pentaract - Build from source directly on Render
+# Stage 1: Build Rust binary
+FROM rust:1.75-slim AS builder
+WORKDIR /app
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
-COPY pentaract/Cargo.toml pentaract/Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release --jobs 2 2>/dev/null; true
-COPY pentaract/src ./src
-RUN touch src/main.rs && cargo build --release --jobs 2 && cp target/release/pentaract /pentaract
+RUN mkdir -p pentaract/src
+COPY pentaract/Cargo.toml pentaract/Cargo.lock pentaract/
+COPY pentaract/src pentaract/src
+RUN cd pentaract && cargo build --release --jobs 2 && cp target/release/pentaract /pentaract
 
 # Stage 2: Build UI
 FROM node:22-slim AS ui
