@@ -1,80 +1,72 @@
 #!/bin/bash
-set -euo pipefail
-
-echo "[entrypoint] Starting bundled PostgreSQL..."
+echo "[entrypoint] Starting..."
 
 PGDATA=/var/lib/postgresql/15/main
 
 # Create postgres user if missing
 if ! id -u postgres &>/dev/null; then
-    groupadd -r postgres
-    useradd -r -g postgres -s /bin/bash -d /var/lib/postgresql postgres
+    groupadd -r postgres 2>/dev/null
+    useradd -r -g postgres -d /var/lib/postgresql postgres 2>/dev/null
 fi
 
-# Ensure data directory exists
-mkdir -p "$PGDATA" /var/run/postgresql /tmp/pg
-chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql /tmp/pg
+# Ensure directories
+mkdir -p "$PGDATA" /var/run/postgresql
+chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
 chmod 700 "$PGDATA"
 
-# Initialize DB if needed
+# Init DB if fresh
 if [ ! -f "$PGDATA/PG_VERSION" ]; then
     echo "[entrypoint] Running initdb..."
-    su - postgres -c "/usr/lib/postgresql/15/bin/initdb -D $PGDATA -E utf8 --locale=C.UTF-8" 2>&1
+    su - postgres -c "/usr/lib/postgresql/15/bin/initdb -D $PGDATA" || {
+        echo "[entrypoint] initdb failed"
+        exit 1
+    }
 fi
 
-# Write minimal pg config
-cat >> "$PGDATA/postgresql.conf" <<'CONF'
-listen_addresses = 'localhost'
-port = 5432
-max_connections = 20
-shared_buffers = 32MB
-work_mem = 4MB
-maintenance_work_mem = 16MB
-effective_cache_size = 128MB
-wal_buffers = 1MB
-min_wal_size = 64MB
-max_wal_size = 256MB
-log_statement = 'none'
-CONF
+# Tune PG config
+{
+    echo "listen_addresses = 'localhost'"
+    echo "port = 5432"
+    echo "max_connections = 10"
+    echo "shared_buffers = 16MB"
+    echo "work_mem = 2MB"
+    echo "wal_level = minimal"
+    echo "fsync = off"
+    echo "synchronous_commit = off"
+    echo "full_page_writes = off"
+    echo "min_wal_size = 32MB"
+    echo "max_wal_size = 64MB"
+} >> "$PGDATA/postgresql.conf"
 
 # Start PG
-echo "[entrypoint] Starting PostgreSQL server..."
-su - postgres -c "/usr/lib/postgresql/15/bin/pg_ctl -D $PGDATA -l /tmp/pg/pg.log start" 2>&1
+echo "[entrypoint] Starting PostgreSQL..."
+su - postgres -c "/usr/lib/postgresql/15/bin/pg_ctl -D $PGDATA -l /tmp/pg.log start" || {
+    echo "[entrypoint] pg_ctl start failed"
+    cat /tmp/pg.log 2>/dev/null
+    exit 1
+}
 
-# Wait for PG to be ready
+# Wait for PG
 echo "[entrypoint] Waiting for PostgreSQL..."
-for i in $(seq 1 30); do
+for i in $(seq 1 15); do
     if su - postgres -c "/usr/lib/postgresql/15/bin/pg_isready -q" 2>/dev/null; then
-        echo "[entrypoint] PostgreSQL is ready (attempt $i)"
+        echo "[entrypoint] PostgreSQL ready"
         break
     fi
-    echo "[entrypoint] Waiting... ($i/30)"
     sleep 1
 done
 
-# Verify PG is actually running
-if ! su - postgres -c "/usr/lib/postgresql/15/bin/pg_isready" 2>/dev/null; then
-    echo "[entrypoint] FATAL: PostgreSQL failed to start. Logs:"
-    cat /tmp/pg/pg.log 2>/dev/null || true
+# Verify
+su - postgres -c "/usr/lib/postgresql/15/bin/pg_isready" || {
+    echo "[entrypoint] PostgreSQL not reachable"
+    cat /tmp/pg.log 2>/dev/null
     exit 1
-fi
+}
 
-# Create database and user
-echo "[entrypoint] Setting up database..."
-su - postgres -c "/usr/lib/postgresql/15/bin/psql -c \"
-    DO \$\$
-    BEGIN
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'pentaract') THEN
-            CREATE ROLE pentaract WITH LOGIN PASSWORD 'pentaract';
-        END IF;
-    END
-    \$\$;\"" 2>&1
+# Create user and database
+echo "[entrypoint] Creating user and database..."
+su - postgres -c "/usr/lib/postgresql/15/bin/psql -c \"CREATE USER pentaract WITH LOGIN PASSWORD 'pentaract';\" 2>/dev/null; echo OK" 2>&1
+su - postgres -c "/usr/lib/postgresql/15/bin/createdb -O pentaract pentaract 2>/dev/null; echo OK" 2>&1
 
-su - postgres -c "/usr/lib/postgresql/15/bin/psql -c \"
-    SELECT 'CREATE DATABASE pentaract OWNER pentaract'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pentaract');\"" 2>&1
-
-echo "[entrypoint] PostgreSQL setup complete."
-echo "[entrypoint] Starting pentaract..."
-
+echo "[entrypoint] Setup complete. Starting pentaract..."
 exec /pentaract
