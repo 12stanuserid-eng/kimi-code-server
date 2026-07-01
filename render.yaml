@@ -4,7 +4,7 @@ services:
     env: docker
     repo: https://github.com/12stanuserid-eng/kimi-code-server
     branch: pentaract-deploy
-    dockerfilePath: ./Dockerfile.ci
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: PORT
         value: 8000
