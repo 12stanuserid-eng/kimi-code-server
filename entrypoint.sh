@@ -1,71 +1,80 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# PostgreSQL setup for Render free tier (ephemeral storage)
-PG_VERSION=15
-PG_DATA=/var/lib/postgresql/$PG_VERSION/main
-PG_BIN=/usr/lib/postgresql/$PG_VERSION/bin
-PG_CONF=/etc/postgresql/$PG_VERSION/main/postgresql.conf
+echo "[entrypoint] Starting bundled PostgreSQL..."
 
-echo "[entrypoint] Initializing PostgreSQL $PG_VERSION..."
+PGDATA=/var/lib/postgresql/15/main
 
-# Create postgres user if not exists
-if ! id postgres &>/dev/null; then
-    echo "[entrypoint] Creating postgres user..."
-    useradd -r -s /bin/false postgres
+# Create postgres user if missing
+if ! id -u postgres &>/dev/null; then
+    groupadd -r postgres
+    useradd -r -g postgres -s /bin/bash -d /var/lib/postgresql postgres
 fi
 
-# Initialize PG data directory if needed
-if [ ! -f "$PG_DATA/PG_VERSION" ]; then
-    echo "[entrypoint] Initializing PG data directory..."
-    mkdir -p "$PG_DATA"
-    chown -R postgres:postgres "$PG_DATA"
-    chmod 700 "$PG_DATA"
-    su - postgres -c "$PG_BIN/initdb -D $PG_DATA -E utf8 --locale=C.UTF-8"
+# Ensure data directory exists
+mkdir -p "$PGDATA" /var/run/postgresql /tmp/pg
+chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql /tmp/pg
+chmod 700 "$PGDATA"
+
+# Initialize DB if needed
+if [ ! -f "$PGDATA/PG_VERSION" ]; then
+    echo "[entrypoint] Running initdb..."
+    su - postgres -c "/usr/lib/postgresql/15/bin/initdb -D $PGDATA -E utf8 --locale=C.UTF-8" 2>&1
 fi
 
-# Configure PostgreSQL for low-memory environment
-echo "[entrypoint] Configuring PostgreSQL for minimal memory usage..."
-su - postgres -c "echo 'listen_addresses = localhost' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'port = 5432' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'shared_buffers = 32MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'effective_cache_size = 128MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'maintenance_work_mem = 16MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'checkpoint_completion_target = 0.5' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'wal_buffers = 1MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'default_statistics_target = 100' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'random_page_cost = 1.1' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'effective_io_concurrency = 200' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'work_mem = 4MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'min_wal_size = 64MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'max_wal_size = 256MB' >> $PG_DATA/postgresql.conf"
-su - postgres -c "echo 'max_connections = 20' >> $PG_DATA/postgresql.conf"
+# Write minimal pg config
+cat >> "$PGDATA/postgresql.conf" <<'CONF'
+listen_addresses = 'localhost'
+port = 5432
+max_connections = 20
+shared_buffers = 32MB
+work_mem = 4MB
+maintenance_work_mem = 16MB
+effective_cache_size = 128MB
+wal_buffers = 1MB
+min_wal_size = 64MB
+max_wal_size = 256MB
+log_statement = 'none'
+CONF
 
-# Start PostgreSQL
-echo "[entrypoint] Starting PostgreSQL..."
-su - postgres -c "$PG_BIN/pg_ctl -D $PG_DATA -l /tmp/pg.log start"
+# Start PG
+echo "[entrypoint] Starting PostgreSQL server..."
+su - postgres -c "/usr/lib/postgresql/15/bin/pg_ctl -D $PGDATA -l /tmp/pg/pg.log start" 2>&1
 
-# Wait for PostgreSQL to be ready
-echo "[entrypoint] Waiting for PostgreSQL to be ready..."
+# Wait for PG to be ready
+echo "[entrypoint] Waiting for PostgreSQL..."
 for i in $(seq 1 30); do
-    if su - postgres -c "$PG_BIN/pg_isready -q" 2>/dev/null; then
-        echo "[entrypoint] PostgreSQL is ready!"
+    if su - postgres -c "/usr/lib/postgresql/15/bin/pg_isready -q" 2>/dev/null; then
+        echo "[entrypoint] PostgreSQL is ready (attempt $i)"
         break
     fi
     echo "[entrypoint] Waiting... ($i/30)"
     sleep 1
 done
 
-# Create pentaract user and database if not exists
-echo "[entrypoint] Setting up pentaract database..."
-su - postgres -c "$PG_BIN/psql -c \"SELECT 1 FROM pg_roles WHERE rolname='pentaract';\"" 2>/dev/null | grep -q 1 || \
-    su - postgres -c "$PG_BIN/psql -c \"CREATE USER pentaract WITH PASSWORD 'pentaract';\"" 2>/dev/null
+# Verify PG is actually running
+if ! su - postgres -c "/usr/lib/postgresql/15/bin/pg_isready" 2>/dev/null; then
+    echo "[entrypoint] FATAL: PostgreSQL failed to start. Logs:"
+    cat /tmp/pg/pg.log 2>/dev/null || true
+    exit 1
+fi
 
-su - postgres -c "$PG_BIN/psql -c \"SELECT 1 FROM pg_database WHERE datname='pentaract';\"" 2>/dev/null | grep -q 1 || \
-    su - postgres -c "$PG_BIN/psql -c \"CREATE DATABASE pentaract OWNER pentaract;\"" 2>/dev/null
+# Create database and user
+echo "[entrypoint] Setting up database..."
+su - postgres -c "/usr/lib/postgresql/15/bin/psql -c \"
+    DO \$\$
+    BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'pentaract') THEN
+            CREATE ROLE pentaract WITH LOGIN PASSWORD 'pentaract';
+        END IF;
+    END
+    \$\$;\"" 2>&1
 
-echo "[entrypoint] PostgreSQL setup complete!"
+su - postgres -c "/usr/lib/postgresql/15/bin/psql -c \"
+    SELECT 'CREATE DATABASE pentaract OWNER pentaract'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'pentaract');\"" 2>&1
 
-# Start pentaract
+echo "[entrypoint] PostgreSQL setup complete."
 echo "[entrypoint] Starting pentaract..."
+
 exec /pentaract
