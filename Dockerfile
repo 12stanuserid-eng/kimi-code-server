@@ -35,14 +35,7 @@ EXPOSE 10000
 
 ENV RUST_BACKTRACE=full
 ENV RUST_LOG=debug
-# External PostgreSQL (Supabase)
-ENV DATABASE_HOST=db.iakqmubdnmoqimnlifms.supabase.co
-ENV DATABASE_PORT=5432
-ENV DATABASE_USER=postgres
-ENV DATABASE_PASSWORD=SARFRAZco1@
-ENV DATABASE_NAME=postgres
-ENV DATABASE_SSL_MODE=require
-# Telegram
+# Telegram defaults
 ENV TELEGRAM_API_BASE_URL=https://api.telegram.org
 ENV TELEGRAM_RATE_LIMIT=18
 

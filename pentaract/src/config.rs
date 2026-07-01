@@ -2,32 +2,10 @@ use std::{env, str::FromStr};
 
 use super::errors::{PentaractError, PentaractResult};
 
-/// Percent-encode special characters in a string for safe inclusion in a URI.
-/// This is needed because the database password may contain characters like `@`
-/// that break URI parsing when used directly in the `postgres://` connection string.
-fn url_encode_password(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for byte in s.bytes() {
-        match byte {
-            // Unreserved characters per RFC 3986
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                result.push(byte as char);
-            }
-            // Everything else gets percent-encoded
-            _ => {
-                result.push_str(&format!("%{:02X}", byte));
-            }
-        }
-    }
-    result
-}
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub db_uri: String,
-    pub db_uri_without_dbname: String,
     pub db_name: String,
-    pub db_ssl_mode: String,
     pub port: u16,
     pub workers: u16,
     pub channel_capacity: u16,
@@ -42,24 +20,44 @@ pub struct Config {
     pub telegram_rate_limit: u8,
 }
 
+/// Extract the database name from a postgres:// connection URL.
+fn extract_db_name_from_url(url: &str) -> String {
+    // URL format: postgres://user:pass@host:port/dbname?params
+    if let Some(path_start) = url.find("://") {
+        let after_scheme = &url[path_start + 3..];
+        // Find the path after host:port (the part after the first / after the @)
+        if let Some(at_pos) = after_scheme.find('@') {
+            let after_at = &after_scheme[at_pos + 1..];
+            // Find the first / after the host:port
+            if let Some(slash_pos) = after_at.find('/') {
+                let path = &after_at[slash_pos + 1..];
+                // Get dbname before ? params
+                let dbname = path.split('?').next().unwrap_or("postgres");
+                return dbname.to_string();
+            }
+        }
+    }
+    "postgres".to_string()
+}
+
 impl Config {
     pub fn new() -> PentaractResult<Self> {
-        let db_user: String = Self::get_env_var("DATABASE_USER")?;
-        let db_password: String = Self::get_env_var("DATABASE_PASSWORD")?;
-        let db_name: String = Self::get_env_var("DATABASE_NAME")?;
-        let db_host: String = Self::get_env_var("DATABASE_HOST")?;
-        let db_port: String = Self::get_env_var("DATABASE_PORT")?;
-        let db_ssl_mode = Self::get_env_var_with_default("DATABASE_SSL_MODE", "require".to_string())?;
-        let encoded_password = url_encode_password(&db_password);
-        let db_uri = {
-            format!(
-                "postgres://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
-            )
-        };
-        let db_uri_without_dbname = {
-            format!(
-                "postgres://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
-            )
+        // Use DATABASE_URL if set (preferred), otherwise build from individual components
+        let (db_uri, db_name) = if let Ok(database_url) = env::var("DATABASE_URL") {
+            // Extract db_name from the URL for use in config
+            let name = extract_db_name_from_url(&database_url);
+            (database_url, name)
+        } else {
+            let db_user: String = Self::get_env_var("DATABASE_USER")?;
+            let db_password: String = Self::get_env_var("DATABASE_PASSWORD")?;
+            let db_name: String = Self::get_env_var("DATABASE_NAME")?;
+            let db_host: String = Self::get_env_var("DATABASE_HOST")?;
+            let db_port: String = Self::get_env_var("DATABASE_PORT")?;
+            let db_ssl_mode = Self::get_env_var_with_default("DATABASE_SSL_MODE", "require".to_string())?;
+            let uri = format!(
+                "postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode={db_ssl_mode}"
+            );
+            (uri, db_name)
         };
         let port = Self::get_env_var("PORT")?;
         let workers = Self::get_env_var("WORKERS")?;
@@ -74,9 +72,7 @@ impl Config {
 
         Ok(Self {
             db_uri,
-            db_uri_without_dbname,
             db_name,
-            db_ssl_mode,
             port,
             workers,
             channel_capacity,
