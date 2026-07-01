@@ -2,6 +2,7 @@
 # Stage 1: Build Rust binary
 FROM rust:latest AS builder
 WORKDIR /app
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 COPY pentaract .
 RUN cargo build --release && cp target/release/pentaract /pentaract
 
@@ -16,7 +17,7 @@ RUN VITE_API_BASE=/api pnpm run build
 # Stage 3: Runtime (no bundled PostgreSQL - using Supabase externally)
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates libgcc-s1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates libssl3 libgcc-s1 && rm -rf /var/lib/apt/lists/*
 
 # Copy application binaries and UI
 COPY --from=builder /pentaract /pentaract
