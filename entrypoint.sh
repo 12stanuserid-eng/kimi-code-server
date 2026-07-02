@@ -1,69 +1,27 @@
 #!/bin/bash
-# Entrypoint: start pentaract — skip local PostgreSQL when using external DB
+# Entrypoint: start pentaract with local PostgreSQL + periodic Supabase backup
 exec > /tmp/entrypoint.log 2>&1
 set -x
 
 echo "[entrypoint] Starting up at $(date)"
 
-# Determine if we should use external DB or start local PostgreSQL
-USE_EXTERNAL_DB=false
-if [ -n "$DATABASE_URL" ]; then
-    USE_EXTERNAL_DB=true
-elif [ -n "$DATABASE_HOST" ] && [ "$DATABASE_HOST" != "localhost" ] && [ "$DATABASE_HOST" != "127.0.0.1" ]; then
-    USE_EXTERNAL_DB=true
-fi
+# ============================================================
+# Step 1: Start bundled PostgreSQL (ALWAYS)
+# ============================================================
+echo "[entrypoint] Starting bundled PostgreSQL..."
+pg_dropcluster --stop 15 main 2>/dev/null || true
+pg_createcluster --start 15 main 2>&1 || {
+    echo "[entrypoint] pg_createcluster failed, trying raw initdb..."
+    PGDATA=/var/lib/postgresql/15/main
+    mkdir -p "$PGDATA" /var/run/postgresql
+    chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
+    su - postgres -c "/usr/lib/postgresql/15/bin/initdb -D $PGDATA"
 
-if [ "$USE_EXTERNAL_DB" = true ]; then
-    echo "[entrypoint] External database detected — skipping local PostgreSQL"
-    echo "[entrypoint] DATABASE_URL: ${DATABASE_URL:+set}"
-    echo "[entrypoint] DATABASE_HOST: ${DATABASE_HOST:-localhost}"
-    echo "[entrypoint] DATABASE_PORT: ${DATABASE_PORT:-5432}"
+    echo "host all all 127.0.0.1/32 md5" >> "$PGDATA/pg_hba.conf"
+    echo "host all all ::1/128 md5" >> "$PGDATA/pg_hba.conf"
+    echo "local all all trust" >> "$PGDATA/pg_hba.conf"
 
-    # Test DNS resolution
-    echo "[entrypoint] Testing DNS resolution..."
-    hostname=$(echo "${DATABASE_HOST:-db.iakqmubdnmoqimnlifms.supabase.co}" | head -1)
-    if command -v host >/dev/null 2>&1; then
-        host "$hostname" 2>&1 || echo "host command failed"
-    elif command -v nslookup >/dev/null 2>&1; then
-        nslookup "$hostname" 2>&1 || echo "nslookup failed"
-    elif command -v getent >/dev/null 2>&1; then
-        getent hosts "$hostname" 2>&1 || echo "getent failed"
-    else
-        echo "No DNS lookup tool available"
-    fi
-
-    # Test TCP connectivity
-    echo "[entrypoint] Testing TCP connectivity to ${hostname}:${DATABASE_PORT:-5432}..."
-    timeout 5 bash -c "echo > /dev/tcp/${hostname}/${DATABASE_PORT:-5432}" 2>&1 &&
-        echo "TCP OK" || echo "TCP FAILED (expected if /dev/tcp not available)"
-
-    # Test psql connectivity
-    echo "[entrypoint] Testing psql connection..."
-    if command -v psql >/dev/null 2>&1; then
-        if [ -n "$DATABASE_URL" ]; then
-            PGPASSWORD="${DATABASE_PASSWORD:-}" timeout 10 psql "$DATABASE_URL" -c "SELECT 1 AS connected;" 2>&1 ||
-                echo "psql connection test failed (expected if binary will also fail)"
-        fi
-    else
-        echo "psql not available"
-    fi
-    echo "[entrypoint] Diagnostic complete."
-else
-    echo "[entrypoint] No external database — starting bundled PostgreSQL"
-
-    pg_dropcluster --stop 15 main 2>/dev/null || true
-    pg_createcluster --start 15 main 2>&1 || {
-        echo "[entrypoint] pg_createcluster failed, trying raw initdb..."
-        PGDATA=/var/lib/postgresql/15/main
-        mkdir -p "$PGDATA" /var/run/postgresql
-        chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
-        su - postgres -c "/usr/lib/postgresql/15/bin/initdb -D $PGDATA"
-
-        echo "host all all 127.0.0.1/32 md5" >> "$PGDATA/pg_hba.conf"
-        echo "host all all ::1/128 md5" >> "$PGDATA/pg_hba.conf"
-        echo "local all all trust" >> "$PGDATA/pg_hba.conf"
-
-        cat >> "$PGDATA/postgresql.conf" << 'EOF'
+    cat >> "$PGDATA/postgresql.conf" << 'EOF'
 listen_addresses = 'localhost'
 port = 5432
 max_connections = 10
@@ -72,37 +30,101 @@ wal_level = minimal
 fsync = off
 synchronous_commit = off
 EOF
-        su - postgres -c "/usr/lib/postgresql/15/bin/pg_ctl -D $PGDATA -l /tmp/pg.log start"
-    }
+    su - postgres -c "/usr/lib/postgresql/15/bin/pg_ctl -D $PGDATA -l /tmp/pg.log start"
+}
 
-    for i in $(seq 1 30); do
-        if su - postgres -c "pg_isready -q" 2>/dev/null; then
-            echo "[entrypoint] PostgreSQL ready after ${i}s"
-            break
-        fi
-        sleep 1
-    done
-
-    su - postgres -c "pg_isready" 2>&1 || {
-        echo "[entrypoint] PostgreSQL failed to become ready!"
-        cat /tmp/pg.log 2>/dev/null || true
-        pg_lsclusters 2>/dev/null || true
-        exit 1
-    }
-
-    PG_HBA=$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)
-    if [ -n "$PG_HBA" ]; then
-        echo "host all all 127.0.0.1/32 md5" >> "$PG_HBA"
-        echo "host all all ::1/128 md5" >> "$PG_HBA"
-        pg_ctlcluster 15 main reload || true
+for i in $(seq 1 30); do
+    if su - postgres -c "pg_isready -q" 2>/dev/null; then
+        echo "[entrypoint] PostgreSQL ready after ${i}s"
+        break
     fi
+    sleep 1
+done
 
-    echo "[entrypoint] Setting up database..."
-    su - postgres -c "psql -c \"CREATE USER pentaract WITH LOGIN PASSWORD 'pentaract';\"" 2>&1 || true
-    su - postgres -c "psql -c \"CREATE DATABASE pentaract OWNER pentaract;\"" 2>&1 || true
-    echo "[entrypoint] PostgreSQL setup complete."
+su - postgres -c "pg_isready" 2>&1 || {
+    echo "[entrypoint] PostgreSQL failed to become ready!"
+    cat /tmp/pg.log 2>/dev/null || true
+    pg_lsclusters 2>/dev/null || true
+    exit 1
+}
+
+PG_HBA=$(find /etc/postgresql -name pg_hba.conf 2>/dev/null | head -1)
+if [ -n "$PG_HBA" ]; then
+    echo "host all all 127.0.0.1/32 md5" >> "$PG_HBA"
+    echo "host all all ::1/128 md5" >> "$PG_HBA"
+    pg_ctlcluster 15 main reload || true
 fi
 
+echo "[entrypoint] Setting up database..."
+su - postgres -c "psql -c \"CREATE USER pentaract WITH LOGIN PASSWORD 'pentaract';\"" 2>&1 || true
+su - postgres -c "psql -c \"CREATE DATABASE pentaract OWNER pentaract;\"" 2>&1 || true
+echo "[entrypoint] PostgreSQL setup complete."
+
+# ============================================================
+# Step 2: Restore from Supabase if available and DB is empty
+# ============================================================
+SUPABASE_URL="${DATABASE_URL:-}"
+if [ -n "$SUPABASE_URL" ]; then
+    echo "[entrypoint] Supabase backup URL detected — attempting restore..."
+
+    # Check if local DB has any tables
+    TABLE_COUNT=$(su - postgres -c "psql -d pentaract -t -A -c \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';\"" 2>/dev/null || echo "0")
+
+    if [ "$TABLE_COUNT" = "0" ] || [ -z "$TABLE_COUNT" ]; then
+        echo "[entrypoint] Local DB empty — restoring from Supabase..."
+        PGPASSWORD="${DATABASE_PASSWORD:-}" pg_dump "$SUPABASE_URL" --no-owner --no-privileges 2>/tmp/pg_dump_err.log | \
+            su - postgres -c "psql -d pentaract" 2>/tmp/pg_restore_err.log || {
+            echo "[entrypoint] Restore from Supabase failed (expected if first run or no backup yet)"
+            cat /tmp/pg_dump_err.log
+            cat /tmp/pg_restore_err.log
+        }
+        echo "[entrypoint] Restore complete."
+    else
+        echo "[entrypoint] Local DB has $TABLE_COUNT tables — skipping restore."
+    fi
+else
+    echo "[entrypoint] No Supabase URL — skipping backup/restore."
+fi
+
+# ============================================================
+# Step 3: Set local DATABASE_URL for Pentaract binary
+# ============================================================
+export DATABASE_URL="postgres://pentaract:pentaract@localhost:5432/pentaract?sslmode=disable"
+export DATABASE_HOST="localhost"
+export DATABASE_PORT="5432"
+export DATABASE_USER="pentaract"
+export DATABASE_PASSWORD="pentaract"
+export DATABASE_NAME="pentaract"
+export DATABASE_SSL_MODE="disable"
+
+echo "[entrypoint] Using local PostgreSQL"
+echo "[entrypoint] DATABASE_URL: postgres://pentaract:****@localhost:5432/pentaract?sslmode=disable"
+
+# ============================================================
+# Step 4: Start background backup cron to Supabase (if URL set)
+# ============================================================
+if [ -n "$SUPABASE_URL" ]; then
+    echo "[entrypoint] Starting background backup to Supabase (every 10 min)..."
+    cat > /tmp/backup.sh << 'BACKUPEOF'
+#!/bin/bash
+SUPABASE_URL="$1"
+while true; do
+    echo "[backup] Running pg_dump at $(date)"
+    pg_dump -U pentaract -h localhost pentaract --no-owner --no-privileges 2>/tmp/backup_err.log | \
+        psql "$SUPABASE_URL" 2>/tmp/backup_apply_err.log && \
+        echo "[backup] Backup to Supabase successful at $(date)" || \
+        echo "[backup] Backup to Supabase failed at $(date) — may be transient"
+    sleep 600
+done
+BACKUPEOF
+    chmod +x /tmp/backup.sh
+    SUPABASE_URL="$SUPABASE_URL" nohup bash /tmp/backup.sh "$SUPABASE_URL" > /tmp/backup_daemon.log 2>&1 &
+    echo "[entrypoint] Backup daemon started (PID $!)"
+fi
+
+# ============================================================
+# Step 5: Start Pentaract
+# ============================================================
 echo "[entrypoint] Starting pentaract..."
 date
 exec /pentaract
