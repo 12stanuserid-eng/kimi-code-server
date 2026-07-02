@@ -10,7 +10,7 @@
 
 const http = require('http');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const net = require('net');
 const fs = require('fs');
@@ -26,6 +26,18 @@ let daemonAlive = false;
 let myPublicUrl = null;
 let kimiProc = null;
 let restartTimer = null;
+
+// ====== PENTARACT BACKUP CONSTANTS ======
+const PENTARACT_URL = process.env.PENTARACT_URL || 'https://pentaract-f4ga.onrender.com';
+const PENTARACT_EMAIL = process.env.PENTARACT_EMAIL || 'admin@pentaract.com';
+const PENTARACT_PASS = process.env.PENTARACT_PASS || 'admin123';
+const BACKUP_STORAGE_ID = process.env.BACKUP_STORAGE_ID || 'ad11ad52-b218-4a1d-a661-16655d8bbbf2';
+const BACKUP_INTERVAL_MIN = parseInt(process.env.BACKUP_INTERVAL_MIN) || 30;
+const KIMI_HOME = process.env['KIMI_CODE_HOME'] || path.join(os.homedir(), '.kimi-code');
+
+let lastBackupTime = null;
+let lastBackupSize = 0;
+let lastBackupStatus = 'never';
 
 function log(m) {
   debugLog.push(`[${new Date().toISOString()}] ${m}`);
@@ -160,6 +172,121 @@ function scheduleRestart() {
   }, RESTART_DELAY_MS);
 }
 
+// ====== PENTARACT BACKUP / RESTORE ======
+
+function pentaractLogin() {
+  try {
+    const result = execSync(`curl -s -X POST "${PENTARACT_URL}/api/auth/login" \
+      -d "email=${encodeURIComponent(PENTARACT_EMAIL)}" -d "password=${encodeURIComponent(PENTARACT_PASS)}"`, {
+      timeout: 15000, encoding: 'utf8'
+    });
+    const data = JSON.parse(result);
+    if (!data.access_token) throw new Error('No access_token in response');
+    return data.access_token;
+  } catch (err) {
+    throw new Error(`Pentaract login failed: ${err.message}`);
+  }
+}
+
+function performBackup() {
+  try {
+    const token = pentaractLogin();
+    const backupName = `kimi-code-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
+    const tarFile = `/tmp/${backupName}`;
+
+    // Create tar.gz of ~/.kimi-code/ (skip logs/cache to keep it small)
+    execSync(`tar -czf ${tarFile} --exclude='${KIMI_HOME}/logs' --exclude='${KIMI_HOME}/cache' \
+      -C ${path.dirname(KIMI_HOME)} ${path.basename(KIMI_HOME)} 2>/dev/null`, { timeout: 30000 });
+
+    const stats = fs.statSync(tarFile);
+
+    // Upload to Pentaract via curl
+    const uploadResult = execSync(`curl -s -X POST "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/upload" \
+      -H "Authorization: Bearer ${token}" \
+      -F "file=@${tarFile}" -F "path=/backups/"`, { timeout: 60000, encoding: 'utf8' });
+
+    // Cleanup temp file
+    try { fs.unlinkSync(tarFile); } catch (e) {}
+
+    lastBackupTime = new Date().toISOString();
+    lastBackupSize = stats.size;
+    lastBackupStatus = 'success';
+    log(`✅ Backup completed: ${backupName} (${(stats.size / 1024).toFixed(1)} KB)`);
+    return true;
+  } catch (err) {
+    lastBackupStatus = `failed: ${err.message}`;
+    log(`❌ Backup failed: ${err.message}`);
+    return false;
+  }
+}
+
+function restoreLatestBackup() {
+  try {
+    const token = pentaractLogin();
+
+    // List backup files
+    const listResult = execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/tree?path=/backups/" \
+      -H "Authorization: Bearer ${token}"`, { timeout: 15000, encoding: 'utf8' });
+    const data = JSON.parse(listResult);
+
+    if (!data.files || data.files.length === 0) {
+      log('ℹ️ No backups found on Pentaract, skipping restore');
+      return false;
+    }
+
+    // Sort by path descending to get latest backup
+    data.files.sort((a, b) => b.path.localeCompare(a.path));
+    const latest = data.files[0];
+
+    log(`🔄 Restoring from: ${latest.path} (${(latest.size / 1024).toFixed(1)} KB)`);
+
+    // Download backup (path already has slashes for FastAPI's {path:path} capture)
+    execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${latest.path}" \
+      -H "Authorization: Bearer ${token}" -o /tmp/restore-kimi.tar.gz`, { timeout: 120000 });
+
+    // Extract to root (tar preserves paths from ~/.kimi-code/)
+    execSync(`tar -xzf /tmp/restore-kimi.tar.gz -C / && rm -f /tmp/restore-kimi.tar.gz`, { timeout: 30000 });
+
+    log('✅ Restore completed successfully');
+    return true;
+  } catch (err) {
+    log(`❌ Restore failed: ${err.message}`);
+    return false;
+  }
+}
+
+function checkAndRestore() {
+  const sessionsDir = path.join(KIMI_HOME, 'sessions');
+  let needsRestore = false;
+  try {
+    if (fs.existsSync(sessionsDir)) {
+      const items = fs.readdirSync(sessionsDir);
+      if (items.length === 0) needsRestore = true;
+    } else {
+      needsRestore = true;
+    }
+  } catch (e) {
+    needsRestore = true;
+  }
+  if (needsRestore) {
+    log('🔍 Sessions data missing, attempting restore from Pentaract...');
+    restoreLatestBackup();
+  } else {
+    log('✅ Sessions data found locally, no restore needed');
+  }
+}
+
+function startBackupScheduler() {
+  log(`📅 Backup scheduler: every ${BACKUP_INTERVAL_MIN} minutes`);
+  // First backup after 2 minutes (give Kimi time to start)
+  setTimeout(() => {
+    log('📤 Running initial backup...');
+    performBackup();
+  }, 120000);
+  // Periodic backup
+  setInterval(performBackup, BACKUP_INTERVAL_MIN * 60 * 1000);
+}
+
 // ====== HTTP SERVER ======
 const server = http.createServer((req, res) => {
   // Record public URL from first external request
@@ -190,6 +317,20 @@ const server = http.createServer((req, res) => {
       url: myPublicUrl || 'not yet',
       uptime: process.uptime(),
       kimi_process_alive: kimiProc !== null && !kimiProc.killed
+    }));
+  }
+
+  // Backup status endpoint
+  if (req.url === '/backup-status') {
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    return res.end(JSON.stringify({
+      last_backup: lastBackupTime,
+      last_size_bytes: lastBackupSize,
+      last_status: lastBackupStatus,
+      storage_id: BACKUP_STORAGE_ID,
+      pentaract_url: PENTARACT_URL,
+      backup_interval_min: BACKUP_INTERVAL_MIN,
+      kimi_home: KIMI_HOME
     }));
   }
 
@@ -234,6 +375,11 @@ server.listen(PORT, '0.0.0.0', () => {
   log(`Server on :${PORT}, Kimi on :${KIMI_PORT}`);
   startKimi();
   startKeepalive();
+  // Check for restore after Kimi starts, then begin backups
+  setTimeout(() => {
+    checkAndRestore();
+    startBackupScheduler();
+  }, 20000); // 20s delay to let Kimi initialize
 });
 
 // Graceful shutdown
