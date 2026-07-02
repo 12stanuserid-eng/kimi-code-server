@@ -1,5 +1,26 @@
-# Pentaract - Minimal test build
-FROM python:3.11-slim
+# Pentaract - Slim Docker build for faster pulls
+# Stage 1: Build Rust binary (use slim image ~500MB vs 2.5GB for latest)
+FROM rust:slim-bookworm AS builder
 WORKDIR /app
-RUN python3 -c "print('BUILD OK: python image works')"
-CMD ["python3", "-m", "http.server", "10000"]
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+COPY pentaract .
+RUN cargo build --release && cp target/release/pentaract /pentaract
+
+# Stage 2: Build UI
+FROM node:22-slim AS ui
+WORKDIR /app
+COPY ui/package.json ui/pnpm-lock.yaml* ./
+RUN npm install -g pnpm@9 && pnpm i && npm uninstall -g pnpm
+COPY ui .
+RUN VITE_API_BASE=/api pnpm run build
+
+# Stage 3: Runtime
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /pentaract /pentaract
+COPY --from=ui /app/dist /ui
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+EXPOSE 10000
+ENV RUST_BACKTRACE=full
+ENV RUST_LOG=debug
+ENTRYPOINT ["/pentaract"]
