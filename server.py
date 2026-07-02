@@ -1,15 +1,12 @@
-"""Pentaract - unlimited file storage server (Telegram + Supabase)"""
-import os
-import sys
-import uuid
-import io
+"""Pentaract - unlimited file storage server (Telegram + Supabase REST API)"""
+import os, sys, uuid, io, json, asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-import asyncio
 
 OS_ENV = os.environ
 
-DATABASE_URL = OS_ENV.get("DATABASE_URL", "")
+SUPABASE_URL = OS_ENV.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = OS_ENV.get("SUPABASE_SERVICE_KEY", "")
 TELEGRAM_BOT_TOKEN = OS_ENV.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = OS_ENV.get("TELEGRAM_CHANNEL_ID", "")
 PORT = int(OS_ENV.get("PORT", "10000"))
@@ -20,166 +17,87 @@ SUPERUSER_EMAIL = OS_ENV.get("SUPERUSER_EMAIL", "admin@pentaract.com")
 SUPERUSER_PASS = OS_ENV.get("SUPERUSER_PASS", "admin123")
 TELEGRAM_API_BASE = OS_ENV.get("TELEGRAM_API_BASE_URL", "https://api.telegram.org")
 
-# Validate (warn only, don't exit — /health will report status)
+# Warn about missing vars but don't exit
 missing = [k for k, v in [
-    ("DATABASE_URL", DATABASE_URL),
+    ("SUPABASE_URL", SUPABASE_URL),
+    ("SUPABASE_SERVICE_KEY", SUPABASE_SERVICE_KEY),
     ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
     ("TELEGRAM_CHANNEL_ID", TELEGRAM_CHANNEL_ID),
 ] if not v]
 if missing:
-    print(f"[WARN] Missing env vars: {', '.join(missing)} — /health will show degraded status", flush=True)
-
-# Fix asyncpg URL: sslmode=require -> ssl=require (asyncpg uses 'ssl', not 'sslmode')
-_async_url = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-ASYNC_DB_URL = _async_url.replace("sslmode=require", "ssl=require").replace("sslmode=prefer", "ssl=prefer")
+    print(f"[WARN] Missing: {', '.join(missing)}", flush=True)
 
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 app = FastAPI(title="Pentaract")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Lazy-loaded globals
-_db_engine = None
 _db_ready = False
-_db_last_error = ""
+_db_error = ""
 
+# ─── Supabase REST helper ──────────────────────────────────────────────────
 
-async def get_db():
-    global _db_engine, _db_ready, _db_last_error
-    if _db_engine is None:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-        _db_engine = create_async_engine(ASYNC_DB_URL, pool_size=2, max_overflow=5)
-        try:
-            async with _db_engine.connect() as conn:
-                from sqlalchemy import text
-                await conn.execute(text("SELECT 1"))
-            print("[db] Connected", flush=True)
-            _db_ready = True
-        except Exception as e:
-            _db_last_error = f"{type(e).__name__}: {e}"
-            print(f"[db] Connection failed: {_db_last_error}", flush=True)
-            raise
-    return _db_engine
+_REST_HEADERS = {
+    "apikey": SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+}
 
+async def _supa(method: str, path: str, data: dict = None, params: dict = None) -> list | dict:
+    """Call Supabase REST API. path is relative to /rest/v1/."""
+    import httpx
+    url = f"{SUPABASE_URL}/rest/v1/{path.lstrip('/')}"
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.request(method, url, headers=_REST_HEADERS, json=data, params=params)
+        if r.status_code >= 400 and r.status_code != 404:
+            raise HTTPException(502, f"Supabase API error: {r.status_code} {r.text[:200]}")
+        if r.status_code == 204 or not r.text:
+            return []
+        return r.json()
 
-async def init_tables(engine):
-    """Create tables if needed."""
-    from sqlalchemy import (Column, String, BigInteger, Boolean, SmallInteger,
-                            Text, ForeignKey, UniqueConstraint, MetaData)
-    from sqlalchemy.orm import DeclarativeBase
-
-    class Base(DeclarativeBase):
-        pass
-
-    class User(Base):
-        __tablename__ = "users"
-        id = Column(String, primary_key=True)
-        email = Column(String(255), unique=True, nullable=False)
-        password_hash = Column(String(255), nullable=False)
-
-    class Storage(Base):
-        __tablename__ = "storages"
-        id = Column(String, primary_key=True)
-        name = Column(String(255), nullable=False)
-        chat_id = Column(int, unique=True, nullable=False)
-
-    class FileRecord(Base):
-        __tablename__ = "files"
-        id = Column(String, primary_key=True)
-        path = Column(Text, nullable=False)
-        size = Column(int, nullable=False)
-        storage_id = Column(String, ForeignKey("storages.id"), nullable=False)
-        is_uploaded = Column(Boolean, nullable=False, default=False)
-        __table_args__ = (UniqueConstraint("path", "storage_id"),)
-
-    class FileChunk(Base):
-        __tablename__ = "file_chunks"
-        id = Column(String, primary_key=True)
-        file_id = Column(String, ForeignKey("files.id"), nullable=False)
-        telegram_file_id = Column(String(255), nullable=False)
-        position = Column(int, nullable=False)
-
-    class Access(Base):
-        __tablename__ = "access"
-        id = Column(String, primary_key=True)
-        user_id = Column(String, ForeignKey("users.id"), nullable=False)
-        storage_id = Column(String, ForeignKey("storages.id"), nullable=False)
-        access_type = Column(String(1), nullable=False)
-        __table_args__ = (UniqueConstraint("user_id", "storage_id"),)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    print("[db] Tables ready", flush=True)
-
-    # Superuser
-    from passlib.hash import bcrypt
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-        result = await session.execute(
-            text("SELECT id FROM users WHERE email = :email"),
-            {"email": SUPERUSER_EMAIL}
+async def _supa_sql(sql: str) -> list | dict:
+    """Execute raw SQL via Supabase /sql endpoint."""
+    import httpx
+    url = f"{SUPABASE_URL}/rest/v1/rpc/"
+    # Use the /sql endpoint
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(
+            f"{SUPABASE_URL}/sql",
+            headers=_REST_HEADERS,
+            content=sql,
         )
-        if not result.scalar_one_or_none():
-            uid = str(uuid.uuid4())
-            await session.execute(
-                text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, :hash)"),
-                {"id": uid, "email": SUPERUSER_EMAIL, "hash": bcrypt.hash(SUPERUSER_PASS)}
-            )
-            await session.commit()
-            print(f"[db] Superuser created: {SUPERUSER_EMAIL}", flush=True)
+        if r.status_code >= 400:
+            text = r.text[:300]
+            raise HTTPException(502, f"Supabase SQL error: {r.status_code} {text}")
+        if not r.text.strip():
+            return []
+        try:
+            return r.json()
+        except json.JSONDecodeError:
+            return []
 
-
-async def init_background():
-    """Initialize DB in background task."""
-    global _db_ready
-    try:
-        engine = await get_db()
-        await init_tables(engine)
-        _db_ready = True
-        print("[startup] Background init complete", flush=True)
-    except Exception as e:
-        print(f"[startup] Background init FAILED: {e}", flush=True)
-
-
-@app.on_event("startup")
-async def startup():
-    print(f"[startup] Pentaract starting on port {PORT}", flush=True)
-    print(f"[startup] DB URL: {ASYNC_DB_URL[:60]}...", flush=True)
-    print(f"[startup] Telegram bot: {TELEGRAM_BOT_TOKEN[:10]}...", flush=True)
-    print(f"[startup] Telegram channel: {TELEGRAM_CHANNEL_ID}", flush=True)
-    # Start DB init in background - don't block server startup
-    asyncio.create_task(init_background())
-    print("[startup] Server is live", flush=True)
-
-
-# ─── Auth helpers ────────────────────────────────────────────────────────────
+# ─── Auth helpers ──────────────────────────────────────────────────────────
 
 from passlib.hash import bcrypt
 from jose import jwt
-from jose.exceptions import JWSError
 ALGO = "HS256"
-
 
 def make_access_token(user_id: str, email: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(seconds=ACCESS_TOKEN_EXPIRE_SECS)
     return jwt.encode({"sub": user_id, "email": email, "exp": exp, "type": "access"}, SECRET_KEY, ALGO)
 
-
 def make_refresh_token(user_id: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     return jwt.encode({"sub": user_id, "exp": exp, "type": "refresh"}, SECRET_KEY, ALGO)
-
 
 def verify_token(token: str) -> dict:
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGO])
     except Exception as e:
         raise HTTPException(401, detail=f"Invalid token: {e}")
-
 
 async def get_user_from_header(authorization: str = "") -> dict:
     if not authorization:
@@ -192,12 +110,11 @@ async def get_user_from_header(authorization: str = "") -> dict:
         raise HTTPException(401, detail="Invalid token type")
     return {"id": payload["sub"], "email": payload.get("email", "")}
 
-
-# ─── Telegram helpers ───────────────────────────────────────────────────────
+# ─── Telegram helpers ──────────────────────────────────────────────────────
 
 async def tg_upload(data: bytes, name: str) -> str:
     import httpx
-    async with httpx.AsyncClient(timeout=60) as c:
+    async with httpx.AsyncClient(timeout=120) as c:
         files = {"document": (name, io.BytesIO(data), "application/octet-stream")}
         r = await c.post(f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
                          data={"chat_id": TELEGRAM_CHANNEL_ID}, files=files)
@@ -206,10 +123,9 @@ async def tg_upload(data: bytes, name: str) -> str:
             raise HTTPException(502, f"Telegram upload failed: {j.get('description', '?')}")
         return j["result"]["document"]["file_id"]
 
-
 async def tg_download(file_id: str) -> bytes:
     import httpx
-    async with httpx.AsyncClient(timeout=60) as c:
+    async with httpx.AsyncClient(timeout=120) as c:
         r = await c.get(f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/getFile?file_id={file_id}")
         j = r.json()
         if not j.get("ok"):
@@ -218,129 +134,168 @@ async def tg_download(file_id: str) -> bytes:
         dl = await c.get(f"{TELEGRAM_API_BASE}/file/bot{TELEGRAM_BOT_TOKEN}/{fp}")
         return dl.content
 
+# ─── DB init via Supabase REST API ────────────────────────────────────────
 
-# ─── Routes ─────────────────────────────────────────────────────────────────
+async def init_db():
+    """Create tables and superuser via Supabase SQL API."""
+    global _db_ready, _db_error
+    try:
+        # Create tables using Supabase SQL API
+        sql = """
+        CREATE TABLE IF NOT EXISTS public.users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS public.storages (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            chat_id BIGINT UNIQUE NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS public.files (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            size BIGINT NOT NULL,
+            storage_id TEXT REFERENCES storages(id),
+            is_uploaded BOOLEAN DEFAULT FALSE
+        );
+        CREATE TABLE IF NOT EXISTS public.file_chunks (
+            id TEXT PRIMARY KEY,
+            file_id TEXT REFERENCES files(id),
+            telegram_file_id TEXT NOT NULL,
+            position INT DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS public.access (
+            id TEXT PRIMARY KEY,
+            user_id TEXT REFERENCES users(id),
+            storage_id TEXT REFERENCES storages(id),
+            access_type TEXT NOT NULL,
+            UNIQUE(user_id, storage_id)
+        );
+        """
+        try:
+            await _supa_sql(sql)
+        except HTTPException as e:
+            # Tables might already exist — that's fine
+            print(f"[db] Table creation note: {e.detail[:100]}", flush=True)
+
+        # Check if superuser exists
+        users = await _supa("GET", "users", params={"email": f"eq.{SUPERUSER_EMAIL}", "select": "id"})
+        if not users or len(users) == 0:
+            uid = str(uuid.uuid4())
+            await _supa("POST", "users", {
+                "id": uid,
+                "email": SUPERUSER_EMAIL,
+                "password_hash": bcrypt.hash(SUPERUSER_PASS),
+            })
+            print(f"[db] Superuser created: {SUPERUSER_EMAIL}", flush=True)
+        else:
+            print(f"[db] Superuser exists: {SUPERUSER_EMAIL}", flush=True)
+
+        _db_ready = True
+        print("[db] Init complete", flush=True)
+    except Exception as e:
+        _db_error = f"{type(e).__name__}: {str(e)[:200]}"
+        print(f"[db] Init FAILED: {_db_error}", flush=True)
+
+@app.on_event("startup")
+async def startup():
+    print(f"[startup] Pentaract starting on port {PORT}", flush=True)
+    print(f"[startup] Supabase: {SUPABASE_URL}", flush=True)
+    print(f"[startup] Telegram bot: {TELEGRAM_BOT_TOKEN[:10]}...", flush=True)
+    asyncio.create_task(init_db())
+    print("[startup] Server is live", flush=True)
+
+# ─── Routes ────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "pentaract", "version": "0.1.0"}
-
 
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
         "db_ready": _db_ready,
-        "db_error": _db_last_error if not _db_ready else "",
+        "db_error": _db_error if not _db_ready else "",
         "telegram_bot": bool(TELEGRAM_BOT_TOKEN),
         "telegram_channel": bool(TELEGRAM_CHANNEL_ID),
     }
 
-
 # Auth
 @app.post("/api/auth/login")
 async def login(email: str = Form(...), password: str = Form(...)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        r = await s.execute(text("SELECT id, email, password_hash FROM users WHERE email=:email"), {"email": email})
-        row = r.fetchone()
-        if not row or not bcrypt.verify(password, row[2]):
-            raise HTTPException(401, detail="Invalid credentials")
-    return {"access_token": make_access_token(row[0], row[1]), "refresh_token": make_refresh_token(row[0]),
-            "token_type": "bearer"}
-
+    users = await _supa("GET", "users", params={"email": f"eq.{email}", "select": "id,email,password_hash"})
+    if not users:
+        raise HTTPException(401, detail="Invalid credentials")
+    u = users[0]
+    if not bcrypt.verify(password, u["password_hash"]):
+        raise HTTPException(401, detail="Invalid credentials")
+    return {"access_token": make_access_token(u["id"], u["email"]),
+            "refresh_token": make_refresh_token(u["id"]), "token_type": "bearer"}
 
 @app.post("/api/auth/refresh")
 async def refresh(authorization: str = ""):
     user = await get_user_from_header(authorization)
-    # Verify user still exists
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        r = await s.execute(text("SELECT email FROM users WHERE id=:id"), {"id": user["id"]})
-        row = r.fetchone()
-        if not row:
-            raise HTTPException(401, detail="User not found")
-    return {"access_token": make_access_token(user["id"], row[0]), "refresh_token": make_refresh_token(user["id"]),
-            "token_type": "bearer"}
-
+    users = await _supa("GET", "users", params={"id": f"eq.{user['id']}", "select": "email"})
+    if not users:
+        raise HTTPException(401, detail="User not found")
+    return {"access_token": make_access_token(user["id"], users[0]["email"]),
+            "refresh_token": make_refresh_token(user["id"]), "token_type": "bearer"}
 
 # Users
 @app.post("/api/users")
 async def create_user(email: str = Form(...), password: str = Form(...)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        r = await s.execute(text("SELECT id FROM users WHERE email=:email"), {"email": email})
-        if r.fetchone():
-            raise HTTPException(409, detail="Email already exists")
-        uid = str(uuid.uuid4())
-        await s.execute(text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, :hash)"),
-                        {"id": uid, "email": email, "hash": bcrypt.hash(password)})
-        await s.commit()
+    existing = await _supa("GET", "users", params={"email": f"eq.{email}", "select": "id"})
+    if existing:
+        raise HTTPException(409, detail="Email already exists")
+    uid = str(uuid.uuid4())
+    await _supa("POST", "users", {"id": uid, "email": email, "password_hash": bcrypt.hash(password)})
     return {"id": uid, "email": email}
-
 
 @app.get("/api/users/me")
 async def me(user: dict = Depends(get_user_from_header)):
     return user
 
-
 # Storages
 @app.post("/api/storages")
 async def create_storage(name: str = Form(...), chat_id: int = Form(...),
                          user: dict = Depends(get_user_from_header)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
     sid = str(uuid.uuid4())
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        try:
-            await s.execute(text("INSERT INTO storages (id, name, chat_id) VALUES (:id, :n, :c)"),
-                            {"id": sid, "n": name, "c": chat_id})
-            await s.execute(text("INSERT INTO access (id, user_id, storage_id, access_type) VALUES (:id, :uid, :sid, 'a')"),
-                            {"id": str(uuid.uuid4()), "uid": user["id"], "sid": sid})
-            await s.commit()
-        except Exception as e:
-            await s.rollback()
-            raise HTTPException(400, detail=str(e))
+    try:
+        await _supa("POST", "storages", {"id": sid, "name": name, "chat_id": chat_id})
+        await _supa("POST", "access", {
+            "id": str(uuid.uuid4()), "user_id": user["id"], "storage_id": sid, "access_type": "a"
+        })
+    except HTTPException as e:
+        raise HTTPException(400, detail=str(e.detail)[:200])
     return {"id": sid, "name": name, "chat_id": chat_id}
-
 
 @app.get("/api/storages")
 async def list_storages(user: dict = Depends(get_user_from_header)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        r = await s.execute(
-            text("SELECT s.id, s.name, s.chat_id FROM storages s JOIN access a ON a.storage_id=s.id WHERE a.user_id=:uid"),
-            {"uid": user["id"]})
-        return [{"id": row[0], "name": row[1], "chat_id": row[2]} for row in r.fetchall()]
-
+    storages = await _supa("GET", "storages",
+                           params={"select": "id,name,chat_id",
+                                   "access.user_id": f"eq.{user['id']}"})
+    return storages
 
 @app.get("/api/storages/{sid}")
 async def get_storage(sid: str, user: dict = Depends(get_user_from_header)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        r = await s.execute(text("SELECT id, name, chat_id FROM storages WHERE id=:id"), {"id": sid})
-        row = r.fetchone()
-        if not row:
-            raise HTTPException(404, detail="Storage not found")
-    return {"id": row[0], "name": row[1], "chat_id": row[2]}
-
+    storages = await _supa("GET", "storages", params={"id": f"eq.{sid}", "select": "id,name,chat_id"})
+    if not storages:
+        raise HTTPException(404, detail="Storage not found")
+    return storages[0]
 
 # Files
 @app.post("/api/files/{sid}/upload")
 async def upload_file(sid: str, file: UploadFile = File(...), path: str = Form("/"),
                       user: dict = Depends(get_user_from_header)):
-    """Upload file to Telegram (unlimited storage) and store metadata in Supabase."""
+    # Check write access
+    access = await _supa("GET", "access", params={
+        "user_id": f"eq.{user['id']}", "storage_id": f"eq.{sid}", "select": "access_type"
+    })
+    if not access or access[0].get("access_type", "") not in ("w", "a"):
+        raise HTTPException(403, "No write access")
+
     data = await file.read()
     fname = file.filename or "unnamed"
     full_path = f"{path.rstrip('/')}/{fname}".lstrip("/")
@@ -348,72 +303,56 @@ async def upload_file(sid: str, file: UploadFile = File(...), path: str = Form("
     # Upload to Telegram
     tg_id = await tg_upload(data, fname)
 
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
     fid = str(uuid.uuid4())
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        # Check access
-        a = await s.execute(text("SELECT access_type FROM access WHERE user_id=:uid AND storage_id=:sid"),
-                            {"uid": user["id"], "sid": sid})
-        at = a.scalar_one_or_none()
-        if not at or at not in ("w", "a"):
-            raise HTTPException(403, "No write access")
-        try:
-            await s.execute(text("INSERT INTO files (id, path, size, storage_id, is_uploaded) VALUES (:id, :p, :sz, :sid, TRUE)"),
-                            {"id": fid, "p": full_path, "sz": len(data), "sid": sid})
-            await s.execute(text("INSERT INTO file_chunks (id, file_id, telegram_file_id, position) VALUES (:id, :fid, :tg, 0)"),
-                            {"id": str(uuid.uuid4()), "fid": fid, "tg": tg_id})
-            await s.commit()
-        except Exception as e:
-            await s.rollback()
-            raise HTTPException(400, detail=str(e))
+    await _supa("POST", "files", {
+        "id": fid, "path": full_path, "size": len(data), "storage_id": sid, "is_uploaded": True
+    })
+    await _supa("POST", "file_chunks", {
+        "id": str(uuid.uuid4()), "file_id": fid, "telegram_file_id": tg_id, "position": 0
+    })
     return {"id": fid, "path": full_path, "size": len(data), "telegram_file_id": tg_id}
-
 
 @app.get("/api/files/{sid}/download/{path:path}")
 async def download_file(sid: str, path: str, user: dict = Depends(get_user_from_header)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        a = await s.execute(text("SELECT access_type FROM access WHERE user_id=:uid AND storage_id=:sid"),
-                            {"uid": user["id"], "sid": sid})
-        at = a.scalar_one_or_none()
-        if not at or at not in ("r", "a"):
-            raise HTTPException(403, "No read access")
-        r = await s.execute(text("SELECT id, path FROM files WHERE storage_id=:sid AND path=:path"),
-                            {"sid": sid, "path": path})
-        row = r.fetchone()
-        if not row:
-            raise HTTPException(404, "File not found")
-        cr = await s.execute(text("SELECT telegram_file_id FROM file_chunks WHERE file_id=:fid ORDER BY position"),
-                             {"fid": row[0]})
-        chunks = [c[0] for c in cr.fetchall()]
+    access = await _supa("GET", "access", params={
+        "user_id": f"eq.{user['id']}", "storage_id": f"eq.{sid}", "select": "access_type"
+    })
+    if not access or access[0].get("access_type", "") not in ("r", "a"):
+        raise HTTPException(403, "No read access")
+
+    files = await _supa("GET", "files", params={
+        "storage_id": f"eq.{sid}", "path": f"eq.{path}", "select": "id"
+    })
+    if not files:
+        raise HTTPException(404, "File not found")
+    fid = files[0]["id"]
+
+    chunks = await _supa("GET", "file_chunks", params={
+        "file_id": f"eq.{fid}", "select": "telegram_file_id", "order": "position.asc"
+    })
     if not chunks:
         raise HTTPException(404, "No chunks found")
-    data = await tg_download(chunks[0])
+
+    data = await tg_download(chunks[0]["telegram_file_id"])
     fname = path.split("/")[-1]
     return Response(content=data, media_type="application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
-
 @app.get("/api/files/{sid}/tree")
 async def list_files(sid: str, path: str = "/", user: dict = Depends(get_user_from_header)):
-    from sqlalchemy import text
-    engine = await get_db()
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
-        a = await s.execute(text("SELECT access_type FROM access WHERE user_id=:uid AND storage_id=:sid"),
-                            {"uid": user["id"], "sid": sid})
-        if not a.scalar_one_or_none():
-            raise HTTPException(403, "No access")
-        prefix = path.rstrip("/") + "/" if path != "/" else ""
-        r = await s.execute(text("SELECT id, path, size, is_uploaded FROM files WHERE storage_id=:sid AND path LIKE :prefix"),
-                            {"sid": sid, "prefix": f"{prefix}%"})
-        files = [{"id": row[0], "path": row[1], "size": row[2], "is_uploaded": row[3]} for row in r.fetchall()]
-    return {"files": files, "path": path}
+    access = await _supa("GET", "access", params={
+        "user_id": f"eq.{user['id']}", "storage_id": f"eq.{sid}", "select": "id"
+    })
+    if not access:
+        raise HTTPException(403, "No access")
 
+    prefix = path.rstrip("/") + "/" if path != "/" else ""
+    files = await _supa("GET", "files", params={
+        "storage_id": f"eq.{sid}", "select": "id,path,size,is_uploaded"
+    })
+    if prefix:
+        files = [f for f in files if f.get("path", "").startswith(prefix)]
+    return {"files": files, "path": path}
 
 # Run
 if __name__ == "__main__":
