@@ -5,11 +5,7 @@ Uses Telegram for unlimited file storage, Supabase PostgreSQL for metadata.
 import os
 import sys
 import uuid
-import hashlib
-import hmac
-import json
 import io
-import asyncio
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -18,7 +14,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, status
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import (
     create_engine, Column, String, BigInteger, Boolean, SmallInteger, 
     Text, DateTime, ForeignKey, UniqueConstraint, Enum as SAEnum, text
@@ -26,7 +22,8 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from passlib.hash import bcrypt
-from jose import jwt, JWTError
+from jose import jwt
+from jose.exceptions import JWTError
 
 # ─── Configuration ───────────────────────────────────────────────────────────────
 
