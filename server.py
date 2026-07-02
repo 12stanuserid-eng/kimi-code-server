@@ -1,7 +1,6 @@
 """Pentaract - unlimited file storage server (Telegram + Supabase REST API)"""
 import os, sys, uuid, io, json, asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 OS_ENV = os.environ
 
@@ -17,7 +16,6 @@ SUPERUSER_EMAIL = OS_ENV.get("SUPERUSER_EMAIL", "admin@pentaract.com")
 SUPERUSER_PASS = OS_ENV.get("SUPERUSER_PASS", "admin123")
 TELEGRAM_API_BASE = OS_ENV.get("TELEGRAM_API_BASE_URL", "https://api.telegram.org")
 
-# Warn about missing vars but don't exit
 missing = [k for k, v in [
     ("SUPABASE_URL", SUPABASE_URL),
     ("SUPABASE_SERVICE_KEY", SUPABASE_SERVICE_KEY),
@@ -27,63 +25,43 @@ missing = [k for k, v in [
 if missing:
     print(f"[WARN] Missing: {', '.join(missing)}", flush=True)
 
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
+from passlib.hash import bcrypt
+from jose import jwt
 
 app = FastAPI(title="Pentaract")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _db_ready = False
 _db_error = ""
+ALGO = "HS256"
 
-# ─── Supabase REST helper ──────────────────────────────────────────────────
+# ─── Supabase REST client ─────────────────────────────────────────────────
 
-_REST_HEADERS = {
-    "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-}
-
-async def _supa(method: str, path: str, data: dict = None, params: dict = None) -> list | dict:
-    """Call Supabase REST API. path is relative to /rest/v1/."""
+async def _supa(method: str, path: str, data: dict = None, params: dict = None, headers: dict = None) -> list | dict:
+    """Call Supabase REST API. Returns decoded JSON."""
     import httpx
     url = f"{SUPABASE_URL}/rest/v1/{path.lstrip('/')}"
+    hdrs = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+    if method == "POST":
+        hdrs["Prefer"] = "return=representation"
+    if headers:
+        hdrs.update(headers)
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.request(method, url, headers=_REST_HEADERS, json=data, params=params)
-        if r.status_code >= 400 and r.status_code != 404:
-            raise HTTPException(502, f"Supabase API error: {r.status_code} {r.text[:200]}")
-        if r.status_code == 204 or not r.text:
-            return []
+        r = await c.request(method, url, headers=hdrs, json=data, params=params)
+        if r.status_code >= 400 and r.status_code not in (404, 409):
+            raise HTTPException(502, f"Supabase error {r.status_code}: {r.text[:200]}")
+        if r.status_code in (204, 201) or not r.text.strip():
+            return [] if r.status_code == 204 else r.json() if r.text.strip() else []
         return r.json()
 
-async def _supa_sql(sql: str) -> list | dict:
-    """Execute raw SQL via Supabase /sql endpoint."""
-    import httpx
-    url = f"{SUPABASE_URL}/rest/v1/rpc/"
-    # Use the /sql endpoint
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(
-            f"{SUPABASE_URL}/sql",
-            headers=_REST_HEADERS,
-            content=sql,
-        )
-        if r.status_code >= 400:
-            text = r.text[:300]
-            raise HTTPException(502, f"Supabase SQL error: {r.status_code} {text}")
-        if not r.text.strip():
-            return []
-        try:
-            return r.json()
-        except json.JSONDecodeError:
-            return []
-
 # ─── Auth helpers ──────────────────────────────────────────────────────────
-
-from passlib.hash import bcrypt
-from jose import jwt
-ALGO = "HS256"
 
 def make_access_token(user_id: str, email: str) -> str:
     exp = datetime.now(timezone.utc) + timedelta(seconds=ACCESS_TOKEN_EXPIRE_SECS)
@@ -99,7 +77,7 @@ def verify_token(token: str) -> dict:
     except Exception as e:
         raise HTTPException(401, detail=f"Invalid token: {e}")
 
-async def get_user_from_header(authorization: str = "") -> dict:
+async def get_user_from_header(authorization: str = Header(None)) -> dict:
     if not authorization:
         raise HTTPException(401, detail="Missing Authorization header")
     scheme, _, token = authorization.partition(" ")
@@ -134,51 +112,12 @@ async def tg_download(file_id: str) -> bytes:
         dl = await c.get(f"{TELEGRAM_API_BASE}/file/bot{TELEGRAM_BOT_TOKEN}/{fp}")
         return dl.content
 
-# ─── DB init via Supabase REST API ────────────────────────────────────────
+# ─── Database init ─────────────────────────────────────────────────────────
 
 async def init_db():
-    """Create tables and superuser via Supabase SQL API."""
+    """Ensure superuser exists via Supabase REST API."""
     global _db_ready, _db_error
     try:
-        # Create tables using Supabase SQL API
-        sql = """
-        CREATE TABLE IF NOT EXISTS public.users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS public.storages (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            chat_id BIGINT UNIQUE NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS public.files (
-            id TEXT PRIMARY KEY,
-            path TEXT NOT NULL,
-            size BIGINT NOT NULL,
-            storage_id TEXT REFERENCES storages(id),
-            is_uploaded BOOLEAN DEFAULT FALSE
-        );
-        CREATE TABLE IF NOT EXISTS public.file_chunks (
-            id TEXT PRIMARY KEY,
-            file_id TEXT REFERENCES files(id),
-            telegram_file_id TEXT NOT NULL,
-            position INT DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS public.access (
-            id TEXT PRIMARY KEY,
-            user_id TEXT REFERENCES users(id),
-            storage_id TEXT REFERENCES storages(id),
-            access_type TEXT NOT NULL,
-            UNIQUE(user_id, storage_id)
-        );
-        """
-        try:
-            await _supa_sql(sql)
-        except HTTPException as e:
-            # Tables might already exist — that's fine
-            print(f"[db] Table creation note: {e.detail[:100]}", flush=True)
-
         # Check if superuser exists
         users = await _supa("GET", "users", params={"email": f"eq.{SUPERUSER_EMAIL}", "select": "id"})
         if not users or len(users) == 0:
@@ -191,7 +130,6 @@ async def init_db():
             print(f"[db] Superuser created: {SUPERUSER_EMAIL}", flush=True)
         else:
             print(f"[db] Superuser exists: {SUPERUSER_EMAIL}", flush=True)
-
         _db_ready = True
         print("[db] Init complete", flush=True)
     except Exception as e:
@@ -235,7 +173,7 @@ async def login(email: str = Form(...), password: str = Form(...)):
             "refresh_token": make_refresh_token(u["id"]), "token_type": "bearer"}
 
 @app.post("/api/auth/refresh")
-async def refresh(authorization: str = ""):
+async def refresh(authorization: str = Header(None)):
     user = await get_user_from_header(authorization)
     users = await _supa("GET", "users", params={"id": f"eq.{user['id']}", "select": "email"})
     if not users:
@@ -267,16 +205,23 @@ async def create_storage(name: str = Form(...), chat_id: int = Form(...),
         await _supa("POST", "access", {
             "id": str(uuid.uuid4()), "user_id": user["id"], "storage_id": sid, "access_type": "a"
         })
-    except HTTPException as e:
-        raise HTTPException(400, detail=str(e.detail)[:200])
+    except HTTPException:
+        raise HTTPException(400, detail="Storage creation failed")
     return {"id": sid, "name": name, "chat_id": chat_id}
 
 @app.get("/api/storages")
 async def list_storages(user: dict = Depends(get_user_from_header)):
-    storages = await _supa("GET", "storages",
-                           params={"select": "id,name,chat_id",
-                                   "access.user_id": f"eq.{user['id']}"})
-    return storages
+    storages = await _supa("GET", "storages", params={"select": "id,name,chat_id",
+                           "order": "name.asc"})
+    # Filter by access
+    result = []
+    for s in storages:
+        access = await _supa("GET", "access", params={
+            "user_id": f"eq.{user['id']}", "storage_id": f"eq.{s['id']}", "select": "id"
+        })
+        if access:
+            result.append(s)
+    return result
 
 @app.get("/api/storages/{sid}")
 async def get_storage(sid: str, user: dict = Depends(get_user_from_header)):
@@ -289,7 +234,6 @@ async def get_storage(sid: str, user: dict = Depends(get_user_from_header)):
 @app.post("/api/files/{sid}/upload")
 async def upload_file(sid: str, file: UploadFile = File(...), path: str = Form("/"),
                       user: dict = Depends(get_user_from_header)):
-    # Check write access
     access = await _supa("GET", "access", params={
         "user_id": f"eq.{user['id']}", "storage_id": f"eq.{sid}", "select": "access_type"
     })
@@ -300,7 +244,7 @@ async def upload_file(sid: str, file: UploadFile = File(...), path: str = Form("
     fname = file.filename or "unnamed"
     full_path = f"{path.rstrip('/')}/{fname}".lstrip("/")
 
-    # Upload to Telegram
+    # Upload to Telegram (unlimited storage)
     tg_id = await tg_upload(data, fname)
 
     fid = str(uuid.uuid4())
