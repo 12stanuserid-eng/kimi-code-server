@@ -71,14 +71,12 @@ if [ -n "$SUPABASE_URL" ]; then
     TABLE_COUNT=$(su - postgres -c "psql -d pentaract -t -A -c \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';\"" 2>/dev/null || echo "0")
 
     if [ "$TABLE_COUNT" = "0" ] || [ -z "$TABLE_COUNT" ]; then
-        echo "[entrypoint] Local DB empty — restoring from Supabase..."
-        PGPASSWORD="${DATABASE_PASSWORD:-}" pg_dump "$SUPABASE_URL" --no-owner --no-privileges 2>/tmp/pg_dump_err.log | \
-            su - postgres -c "psql -d pentaract" 2>/tmp/pg_restore_err.log || {
-            echo "[entrypoint] Restore from Supabase failed (expected if first run or no backup yet)"
-            cat /tmp/pg_dump_err.log
-            cat /tmp/pg_restore_err.log
+        echo "[entrypoint] Local DB empty — attempting restore from Supabase (timeout 15s)..."
+        timeout 15 sh -c "PGPASSWORD=\"${DATABASE_PASSWORD:-}\" pg_dump \"$SUPABASE_URL\" --no-owner --no-privileges 2>/tmp/pg_dump_err.log | su - postgres -c 'psql -d pentaract' 2>/tmp/pg_restore_err.log" && \
+            echo "[entrypoint] Restore from Supabase successful." || {
+            echo "[entrypoint] Restore from Supabase failed or timed out (non-critical, continuing)"
+            cat /tmp/pg_dump_err.log 2>/dev/null || true
         }
-        echo "[entrypoint] Restore complete."
     else
         echo "[entrypoint] Local DB has $TABLE_COUNT tables — skipping restore."
     fi
@@ -110,8 +108,8 @@ if [ -n "$SUPABASE_URL" ]; then
 SUPABASE_URL="$1"
 while true; do
     echo "[backup] Running pg_dump at $(date)"
-    pg_dump -U pentaract -h localhost pentaract --no-owner --no-privileges 2>/tmp/backup_err.log | \
-        psql "$SUPABASE_URL" 2>/tmp/backup_apply_err.log && \
+    timeout 30 pg_dump -U pentaract -h localhost pentaract --no-owner --no-privileges 2>/tmp/backup_err.log | \
+        timeout 30 psql "$SUPABASE_URL" 2>/tmp/backup_apply_err.log && \
         echo "[backup] Backup to Supabase successful at $(date)" || \
         echo "[backup] Backup to Supabase failed at $(date) — may be transient"
     sleep 600
