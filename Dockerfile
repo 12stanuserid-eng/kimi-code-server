@@ -20,7 +20,9 @@ RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/
 COPY --from=builder /pentaract /pentaract
 COPY --from=ui /app/dist /ui
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 EXPOSE 10000
 ENV RUST_BACKTRACE=full
 ENV RUST_LOG=debug
-ENTRYPOINT ["/pentaract"]
+ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
