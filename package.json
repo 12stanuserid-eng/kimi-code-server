@@ -8,7 +8,7 @@
     "setup": "node setup.js"
   },
   "dependencies": {
-    "@moonshot-ai/kimi-code": "^0.20.1"
+    "@moonshot-ai/kimi-code": "^0.22.1"
   },
   "engines": {
     "node": ">=18.0.0"
