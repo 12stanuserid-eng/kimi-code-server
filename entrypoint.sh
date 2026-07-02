@@ -1,15 +1,22 @@
 #!/bin/bash
-# Entrypoint: start pentaract — if DATABASE_URL is set, skip local PostgreSQL
+# Entrypoint: start pentaract — skip local PostgreSQL when using external DB
 exec > /tmp/entrypoint.log 2>&1
 set -x
 
 echo "[entrypoint] Starting up at $(date)"
 
+# Determine if we should use external DB or start local PostgreSQL
+USE_EXTERNAL_DB=false
 if [ -n "$DATABASE_URL" ]; then
-    echo "[entrypoint] DATABASE_URL is set — skipping local PostgreSQL, connecting to external DB"
-    echo "[entrypoint] DATABASE_URL prefix: $(echo "$DATABASE_URL" | cut -d'@' -f2 | cut -d'/' -f1)"
-else
-    echo "[entrypoint] No DATABASE_URL — starting bundled PostgreSQL"
+    USE_EXTERNAL_DB=true
+elif [ -n "$DATABASE_HOST" ] && [ "$DATABASE_HOST" != "localhost" ] && [ "$DATABASE_HOST" != "127.0.0.1" ]; then
+    USE_EXTERNAL_DB=true
+fi
+
+if [ "$USE_EXTERNAL_DB" = true ]; then
+    echo "[entrypoint] External database detected — skipping local PostgreSQL"
+    echo "[entrypoint] DATABASE_URL: ${DATABASE_URL:+set}"
+    echo "[entrypoint] DATABASE_HOST: ${DATABASE_HOST:-localhost}"
 
     pg_dropcluster --stop 15 main 2>/dev/null || true
     pg_createcluster --start 15 main 2>&1 || {
