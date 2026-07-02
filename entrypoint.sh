@@ -17,6 +17,39 @@ if [ "$USE_EXTERNAL_DB" = true ]; then
     echo "[entrypoint] External database detected — skipping local PostgreSQL"
     echo "[entrypoint] DATABASE_URL: ${DATABASE_URL:+set}"
     echo "[entrypoint] DATABASE_HOST: ${DATABASE_HOST:-localhost}"
+    echo "[entrypoint] DATABASE_PORT: ${DATABASE_PORT:-5432}"
+
+    # Test DNS resolution
+    echo "[entrypoint] Testing DNS resolution..."
+    hostname=$(echo "${DATABASE_HOST:-db.iakqmubdnmoqimnlifms.supabase.co}" | head -1)
+    if command -v host >/dev/null 2>&1; then
+        host "$hostname" 2>&1 || echo "host command failed"
+    elif command -v nslookup >/dev/null 2>&1; then
+        nslookup "$hostname" 2>&1 || echo "nslookup failed"
+    elif command -v getent >/dev/null 2>&1; then
+        getent hosts "$hostname" 2>&1 || echo "getent failed"
+    else
+        echo "No DNS lookup tool available"
+    fi
+
+    # Test TCP connectivity
+    echo "[entrypoint] Testing TCP connectivity to ${hostname}:${DATABASE_PORT:-5432}..."
+    timeout 5 bash -c "echo > /dev/tcp/${hostname}/${DATABASE_PORT:-5432}" 2>&1 &&
+        echo "TCP OK" || echo "TCP FAILED (expected if /dev/tcp not available)"
+
+    # Test psql connectivity
+    echo "[entrypoint] Testing psql connection..."
+    if command -v psql >/dev/null 2>&1; then
+        if [ -n "$DATABASE_URL" ]; then
+            PGPASSWORD="${DATABASE_PASSWORD:-}" timeout 10 psql "$DATABASE_URL" -c "SELECT 1 AS connected;" 2>&1 ||
+                echo "psql connection test failed (expected if binary will also fail)"
+        fi
+    else
+        echo "psql not available"
+    fi
+    echo "[entrypoint] Diagnostic complete."
+else
+    echo "[entrypoint] No external database — starting bundled PostgreSQL"
 
     pg_dropcluster --stop 15 main 2>/dev/null || true
     pg_createcluster --start 15 main 2>&1 || {
