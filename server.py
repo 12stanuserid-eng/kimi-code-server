@@ -29,7 +29,9 @@ missing = [k for k, v in [
 if missing:
     print(f"[WARN] Missing env vars: {', '.join(missing)} — /health will show degraded status", flush=True)
 
-ASYNC_DB_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+# Fix asyncpg URL: sslmode=require -> ssl=require (asyncpg uses 'ssl', not 'sslmode')
+_async_url = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+ASYNC_DB_URL = _async_url.replace("sslmode=require", "ssl=require").replace("sslmode=prefer", "ssl=prefer")
 
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import Response
@@ -42,10 +44,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # Lazy-loaded globals
 _db_engine = None
 _db_ready = False
+_db_last_error = ""
 
 
 async def get_db():
-    global _db_engine, _db_ready
+    global _db_engine, _db_ready, _db_last_error
     if _db_engine is None:
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
         _db_engine = create_async_engine(ASYNC_DB_URL, pool_size=2, max_overflow=5)
@@ -56,7 +59,8 @@ async def get_db():
             print("[db] Connected", flush=True)
             _db_ready = True
         except Exception as e:
-            print(f"[db] Connection failed: {e}", flush=True)
+            _db_last_error = f"{type(e).__name__}: {e}"
+            print(f"[db] Connection failed: {_db_last_error}", flush=True)
             raise
     return _db_engine
 
@@ -227,6 +231,7 @@ async def health():
     return {
         "status": "ok",
         "db_ready": _db_ready,
+        "db_error": _db_last_error if not _db_ready else "",
         "telegram_bot": bool(TELEGRAM_BOT_TOKEN),
         "telegram_channel": bool(TELEGRAM_CHANNEL_ID),
     }
