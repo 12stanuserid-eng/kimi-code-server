@@ -5,22 +5,24 @@ use tokio::time;
 use tracing::warn;
 
 pub async fn get_pool(dsn: &str, max_connection: u32, timeout: Duration) -> PgPool {
-    let max_retries: u32 = 10;
+    let max_retries: u32 = 3;
     let mut delay = Duration::from_secs(1);
 
     // Initial connection attempt
+    tracing::info!(dsn = %dsn, "attempting database connection");
     if let Ok(pool) = PgPoolOptions::new()
         .max_connections(max_connection)
         .acquire_timeout(timeout)
         .connect(dsn)
         .await
     {
-        tracing::debug!("established connection with database");
+        tracing::info!("established connection with database");
         return pool;
     }
 
-    // Retry with exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped)
+    // Retry with exponential backoff: 1s, 2s, 4s
     for attempt in 1..=max_retries {
+        tracing::info!(attempt, max_retries, "retrying database connection");
         let result = PgPoolOptions::new()
             .max_connections(max_connection)
             .acquire_timeout(timeout)
@@ -29,7 +31,7 @@ pub async fn get_pool(dsn: &str, max_connection: u32, timeout: Duration) -> PgPo
 
         match result {
             Ok(pool) => {
-                tracing::debug!("established connection with database");
+                tracing::info!("established connection with database");
                 return pool;
             }
             Err(e) => {
