@@ -1,5 +1,5 @@
 """Pentaract - unlimited file storage server (Telegram + Supabase REST API)"""
-import os, sys, uuid, io, json, asyncio
+import os, sys, uuid, io, json, asyncio, hashlib, secrets
 from datetime import datetime, timedelta, timezone
 
 OS_ENV = os.environ
@@ -28,7 +28,6 @@ if missing:
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from passlib.hash import bcrypt
 from jose import jwt
 
 app = FastAPI(title="Pentaract")
@@ -60,6 +59,23 @@ async def _supa(method: str, path: str, data: dict = None, params: dict = None, 
         if r.status_code in (204, 201) or not r.text.strip():
             return [] if r.status_code == 204 else r.json() if r.text.strip() else []
         return r.json()
+
+# ─── Password helpers (pbkdf2, no external deps) ─────────────────────────
+
+PBKDF2_ITER = 600000
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), PBKDF2_ITER)
+    return f"{salt}:{dk.hex()}"
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, dk_hex = stored.split(":", 1)
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), PBKDF2_ITER)
+        return dk.hex() == dk_hex
+    except Exception:
+        return False
 
 # ─── Auth helpers ──────────────────────────────────────────────────────────
 
@@ -125,7 +141,7 @@ async def init_db():
             await _supa("POST", "users", {
                 "id": uid,
                 "email": SUPERUSER_EMAIL,
-                "password_hash": bcrypt.hash(SUPERUSER_PASS),
+                "password_hash": hash_password(SUPERUSER_PASS),
             })
             print(f"[db] Superuser created: {SUPERUSER_EMAIL}", flush=True)
         else:
@@ -167,7 +183,7 @@ async def login(email: str = Form(...), password: str = Form(...)):
     if not users:
         raise HTTPException(401, detail="Invalid credentials")
     u = users[0]
-    if not bcrypt.verify(password, u["password_hash"]):
+    if not verify_password(password, u["password_hash"]):
         raise HTTPException(401, detail="Invalid credentials")
     return {"access_token": make_access_token(u["id"], u["email"]),
             "refresh_token": make_refresh_token(u["id"]), "token_type": "bearer"}
@@ -188,7 +204,7 @@ async def create_user(email: str = Form(...), password: str = Form(...)):
     if existing:
         raise HTTPException(409, detail="Email already exists")
     uid = str(uuid.uuid4())
-    await _supa("POST", "users", {"id": uid, "email": email, "password_hash": bcrypt.hash(password)})
+    await _supa("POST", "users", {"id": uid, "email": email, "password_hash": hash_password(password)})
     return {"id": uid, "email": email}
 
 @app.get("/api/users/me")
