@@ -1,6 +1,6 @@
-# Pentaract - Slim Docker build for faster pulls
-# Stage 1: Build Rust binary (use slim image ~500MB vs 2.5GB for latest)
-FROM rust:slim-bookworm AS builder
+# Pentaract - CI build for ttl.sh
+# Stage 1: Build Rust binary
+FROM rust:latest AS builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 COPY pentaract .
@@ -10,7 +10,7 @@ RUN cargo build --release && cp target/release/pentaract /pentaract
 FROM node:22-slim AS ui
 WORKDIR /app
 COPY ui/package.json ui/pnpm-lock.yaml* ./
-RUN npm install -g pnpm@9 && pnpm i && npm uninstall -g pnpm
+RUN npm install -g pnpm@9 && pnpm i
 COPY ui .
 RUN VITE_API_BASE=/api pnpm run build
 
