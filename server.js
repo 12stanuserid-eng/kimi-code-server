@@ -373,6 +373,37 @@ const server = http.createServer((req, res) => {
   res.end(STARTING_HTML);
 });
 
+// ====== WebSocket Proxy for Kimi daemon (realtime) ======
+server.on('upgrade', (req, socket, head) => {
+  // Only proxy WebSocket requests when daemon is alive
+  if (!daemonAlive) {
+    socket.destroy();
+    return;
+  }
+
+  const opts = {
+    hostname: '127.0.0.1',
+    port: KIMI_PORT,
+    path: req.url,
+    method: 'GET',
+    headers: { ...req.headers, host: `127.0.0.1:${KIMI_PORT}` }
+  };
+
+  const proxyReq = http.request(opts);
+
+  proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+    // Bidirectional pipe between client and backend WebSocket
+    proxySocket.pipe(socket);
+    socket.pipe(proxySocket);
+    if (proxyHead && proxyHead.length) {
+      proxySocket.unshift(proxyHead);
+    }
+  });
+
+  proxyReq.on('error', () => { socket.destroy(); });
+  proxyReq.end();
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   log(`=== Kimi Code Render v5 ===`);
   log(`Server on :${PORT}, Kimi on :${KIMI_PORT}`);
