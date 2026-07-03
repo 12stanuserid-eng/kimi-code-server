@@ -339,6 +339,61 @@ const server = http.createServer((req, res) => {
     }));
   }
 
+  // Webhook endpoint (for Render deploy hooks, GitHub webhooks, etc.)
+  if (req.url === '/webhook' || req.url === '/deploy-hook') {
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', () => {
+        let data;
+        try { data = JSON.parse(body); } catch(e) { data = { raw: body }; }
+        log(`🔔 Webhook received: ${JSON.stringify(data).substring(0, 500)}`);
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        return res.end(JSON.stringify({ status: 'ok', message: 'Webhook processed' }));
+      });
+      return;
+    }
+    // GET returns info
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    return res.end(JSON.stringify({
+      endpoints: {
+        post: 'Send POST with JSON payload to trigger deploy hooks',
+        get: 'This help message'
+      }
+    }));
+  }
+
+  // WebSocket diagnostics endpoint
+  if (req.url === '/ws-diagnostics') {
+    const cfRay = req.headers['cf-ray'] || null;
+    const cfVisitor = req.headers['cf-visitor'] || null;
+    const via = req.headers['via'] || null;
+    const isCloudflare = cfRay !== null || (via && via.toLowerCase().includes('cloudflare'));
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    return res.end(JSON.stringify({
+      message: 'WebSocket diagnostics',
+      public_url: myPublicUrl || 'not yet detected',
+      cloudflare_detected: isCloudflare,
+      cf_ray: cfRay,
+      headers_received: {
+        host: req.headers.host || null,
+        origin: req.headers.origin || 'none (same-origin)',
+        'x-forwarded-proto': req.headers['x-forwarded-proto'] || null,
+        'x-forwarded-for': req.headers['x-forwarded-for'] || null,
+      },
+      kimi_daemon_alive: daemonAlive,
+      kimi_process_alive: kimiProc !== null && !kimiProc.killed,
+      ws_proxy_ready: daemonAlive && kimiProc !== null && !kimiProc.killed,
+      note: isCloudflare
+        ? '⚠️ Cloudflare detected! WebSocket upgrades are blocked by Cloudflare on *.onrender.com domains. The browser sends Origin header -> Cloudflare returns 403.'
+        : '✅ No Cloudflare detected. WebSocket should work directly.',
+      fix: {
+        solution: 'Use a custom domain pointed directly to Render (no Cloudflare proxy).',
+        details: 'Render\'s managed *.onrender.com domains use Cloudflare with WebSocket Origin Check enabled. The browser always sends the Origin header for WebSocket connections. Cloudflare blocks the upgrade with 403/400. To fix: configure a custom domain (e.g., kimi.yourdomain.com) with DNS pointing directly to Render (gray cloud, not proxied through Cloudflare).'
+      }
+    }));
+  }
+
   // Proxy to Kimi daemon
   if (daemonAlive) {
     const opts = {
@@ -422,6 +477,10 @@ server.listen(PORT, '0.0.0.0', () => {
   // Periodic daemon health check (every 30s) so WebSocket handler has fresh flag
   setInterval(checkDaemon, 30000);
   log('💾 Backups disabled (execSync blocks event loop)');
+  // Warn about Cloudflare WebSocket limitation
+  log('⚠️ WebSocket: Cloudflare on *.onrender.com blocks WS upgrades (Origin check).');
+  log('   Fix: Use a custom domain with Cloudflare proxy DISABLED (gray cloud DNS).');
+  log('   See /ws-diagnostics endpoint for detailed info.');
   // NOTE: Backups are disabled because execSync blocks the event loop,
   // causing the server to become unresponsive for minutes.
   // setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
