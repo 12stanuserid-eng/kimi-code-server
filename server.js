@@ -348,17 +348,40 @@ const server = http.createServer((req, res) => {
         let data;
         try { data = JSON.parse(body); } catch(e) { data = { raw: body }; }
         log(`🔔 Webhook received: ${JSON.stringify(data).substring(0, 500)}`);
+
+        // Render deploy hook payload: { "service_id": "...", "deploy_id": "...", "trigger": "..." }
+        if (data.service_id || data.deploy_id || data.trigger === 'render') {
+          log(`🚀 Render deploy hook detected: service=${data.service_id || 'unknown'}, deploy=${data.deploy_id || 'unknown'}`);
+        }
+        // GitHub push payload: { "ref": "...", "repository": {...}, "commits": [...] }
+        if (data.ref && data.repository) {
+          const branch = data.ref.replace('refs/heads/', '');
+          const repoName = data.repository.full_name || data.repository.name;
+          log(`📦 GitHub push to ${repoName}:${branch} — ${(data.commits || []).length} commits`);
+        }
+
         res.writeHead(200, {'Content-Type': 'application/json'});
-        return res.end(JSON.stringify({ status: 'ok', message: 'Webhook processed' }));
+        return res.end(JSON.stringify({
+          status: 'ok',
+          message: 'Webhook processed',
+          received_at: new Date().toISOString(),
+          event_type: data.trigger || (data.ref ? 'github_push' : 'generic')
+        }));
       });
       return;
     }
     // GET returns info
     res.writeHead(200, {'Content-Type': 'application/json'});
     return res.end(JSON.stringify({
+      service: 'Kimi Code Server Webhook',
+      version: 'v5-enhanced',
       endpoints: {
-        post: 'Send POST with JSON payload to trigger deploy hooks',
+        post: 'Send POST with JSON payload — supports Render deploy hooks, GitHub push events, and generic webhooks',
         get: 'This help message'
+      },
+      example_payloads: {
+        render_deploy: '{"trigger":"render","service_id":"srv-xxx","deploy_id":"dep-xxx"}',
+        github_push: '{"ref":"refs/heads/main","repository":{"full_name":"user/repo"},"commits":[{"id":"abc123","message":"update"}]}'
       }
     }));
   }
