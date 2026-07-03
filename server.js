@@ -373,35 +373,26 @@ const server = http.createServer((req, res) => {
   res.end(STARTING_HTML);
 });
 
-// ====== WebSocket Proxy for Kimi daemon (realtime) ======
+// ====== WebSocket Proxy for Kimi daemon (raw TCP tunnel) ======
 server.on('upgrade', (req, socket, head) => {
-  // Only proxy WebSocket requests when daemon is alive
-  if (!daemonAlive) {
-    socket.destroy();
-    return;
+  if (!daemonAlive) { socket.destroy(); return; }
+
+  // Build the exact HTTP upgrade request to forward (override host)
+  let reqLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (k !== 'host') reqLine += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
   }
+  reqLine += `host: 127.0.0.1:${KIMI_PORT}\r\n\r\n`;
 
-  const opts = {
-    hostname: '127.0.0.1',
-    port: KIMI_PORT,
-    path: req.url,
-    method: 'GET',
-    headers: { ...req.headers, host: `127.0.0.1:${KIMI_PORT}` }
-  };
-
-  const proxyReq = http.request(opts);
-
-  proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
-    // Bidirectional pipe between client and backend WebSocket
+  const proxySocket = net.connect(KIMI_PORT, '127.0.0.1', () => {
+    proxySocket.write(reqLine);
+    if (head && head.length) proxySocket.write(head);
     proxySocket.pipe(socket);
     socket.pipe(proxySocket);
-    if (proxyHead && proxyHead.length) {
-      proxySocket.unshift(proxyHead);
-    }
   });
 
-  proxyReq.on('error', () => { socket.destroy(); });
-  proxyReq.end();
+  proxySocket.on('error', () => { socket.destroy(); });
+  socket.on('error', () => { proxySocket.destroy(); });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
