@@ -375,6 +375,12 @@ provider = "opencode"
 model = "deepseek-v4-flash-free"
 max_context_size = 128000
 
+# Model alias so deepseek-v4-flash-free resolves even when set as default_model
+[models."deepseek-v4-flash-free"]
+provider = "opencode"
+model = "deepseek-v4-flash-free"
+max_context_size = 128000
+
 [models."opencode-deepseek-v4-pro"]
 provider = "opencode"
 model = "deepseek-v4-pro"

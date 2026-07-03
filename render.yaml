@@ -11,7 +11,7 @@ services:
       - key: NODE_VERSION
         value: 18.18.0
       - key: KIMI_DEFAULT_MODEL
-        value: deepseek-v4-flash-free
+        value: opencode-deepseek-v4
       - key: OPENAI_API_KEY
         sync: false
       - key: KIMI_CODE_PASSWORD
