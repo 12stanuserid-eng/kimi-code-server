@@ -21,6 +21,9 @@ const PORT = parseInt(process.env.PORT) || 10000;
 const KIMI_PORT = PORT + 1;
 const RESTART_DELAY_MS = 5000;
 
+// Run setup.js as fallback (ensures config.toml exists, safe to call multiple times)
+try { require('./setup.js'); } catch(e) { console.error('Setup fallback error:', e.message); }
+
 let debugLog = [];
 let daemonAlive = false;
 let myPublicUrl = null;

@@ -21,134 +21,112 @@ const apiKey = process.env.OPENAI_API_KEY || '';
 const defaultModel = process.env.KIMI_DEFAULT_MODEL || 'deepseek-v4-flash-free';
 
 const config = `# Kimi Code Configuration - Auto-generated
-# Includes all free models from multiple providers
+# Config format for Kimi Code v0.21.0+
+# Uses [providers.X] (plural) - NOT [provider.X] (singular)
 
-[server]
-port = ${parseInt(process.env.KIMI_PORT) || 58627}
-host = "0.0.0.0"
-max_message_length = 128000
-enable_telemetry = false
-
-[agent]
 default_model = "${defaultModel}"
-temperature = 0.7
-max_tokens = 8192
-enable_swarm = true
 
 # ====== PROVIDERS ======
-[provider]
-default = "openrouter"
 
-[provider.openrouter]
+[providers.openrouter]
+type = "openai"
+api_key = "${apiKey}"
 base_url = "https://openrouter.ai/api/v1"
-api_key = "${apiKey}"
-max_retries = 3
 
-[provider.freebuff]
+[providers.freebuff]
+type = "openai"
+api_key = "${apiKey}"
 base_url = "https://api.freebuff.ai/v1"
-api_key = "${apiKey}"
-max_retries = 2
 
-[provider.verdant]
-base_url = "https://api.verdant.code/v1"
+[providers.omni]
+type = "openai"
 api_key = "${apiKey}"
-max_retries = 2
-
-[provider.omni]
 base_url = "https://omni-router.ai/v1"
-api_key = "${apiKey}"
-max_retries = 3
 
 # ====== MODELS - OpenRouter Free ======
+
 [models.deepseek-v4-flash-free]
 provider = "openrouter"
 model = "deepseek/deepseek-v4-flash-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.nemotron-3-ultra-free]
 provider = "openrouter"
 model = "nvidia/nemotron-3-ultra-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.big-pickle]
 provider = "openrouter"
 model = "big-pickle/big-pickle-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.mimo-v2.5-free]
 provider = "openrouter"
 model = "mimo/mimo-v2.5-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.qwen-3.6-plus-free]
 provider = "openrouter"
 model = "qwen/qwen-3.6-plus-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.minimax-m3-free]
 provider = "openrouter"
 model = "minimax/minimax-m3-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.kimi-k2.6-free]
 provider = "openrouter"
 model = "moonshotai/kimi-k2.6-free"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 # ====== MODELS - GPT fallbacks ======
+
 [models.gpt-4o-mini]
 provider = "openrouter"
 model = "openai/gpt-4o-mini"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.claude-sonnet]
 provider = "openrouter"
 model = "anthropic/claude-sonnet-4"
-api_key = "${apiKey}"
+max_context_size = 200000
 
 # ====== FREE MODELS via Freebuff ======
+
 [models.freebuff-ultra]
 provider = "freebuff"
 model = "freebuff/free-ultra"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.freebuff-pro]
 provider = "freebuff"
 model = "freebuff/free-pro"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 # ====== OMNI ROUTER MODELS ======
+
 [models.omni-free]
 provider = "omni"
 model = "omni/free-router"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 [models.omni-smart]
 provider = "omni"
 model = "omni/smart-router"
-api_key = "${apiKey}"
+max_context_size = 128000
 
 # ====== CLAUDE CODE ACCESSOR ======
+
 [models.claude-code-sonnet]
 provider = "openrouter"
 model = "anthropic/claude-sonnet-4-code"
-api_key = "${apiKey}"
+max_context_size = 200000
 
 [models.claude-code-haiku]
 provider = "openrouter"
 model = "anthropic/claude-3-haiku-code"
-api_key = "${apiKey}"
-
-# ====== VERDENT CODE ======
-[models.verdent-free]
-provider = "verdant"
-model = "verdant/code-free"
-api_key = "${apiKey}"
-
-[models.verdent-pro]
-provider = "verdant"
-model = "verdant/code-pro"
-api_key = "${apiKey}"
+max_context_size = 200000
 `;
 
 fs.writeFileSync(configPath, config);
