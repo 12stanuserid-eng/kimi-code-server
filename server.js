@@ -110,11 +110,11 @@ function startKimi() {
     .map(p => path.join(__dirname, p))
     .find(p => { try { return fs.existsSync(p); } catch(e) { return false; } }) || 'npx';
 
-  // Force KIMI_CODE_PASSWORD — known token for login
+  // Force KIMI_CODE_PASSWORD — always use FIXED_TOKEN regardless of Render env vars
   const kimiEnv = {
     ...process.env,
     HOME: process.env.HOME || '/root',
-    KIMI_CODE_PASSWORD: process.env.KIMI_CODE_PASSWORD || FIXED_TOKEN,
+    KIMI_CODE_PASSWORD: FIXED_TOKEN,
   };
 
   // Use `server run --foreground` — never daemonizes, process stays alive
@@ -421,11 +421,18 @@ server.listen(PORT, '0.0.0.0', () => {
   startKeepalive();
   // Periodic daemon health check (every 30s) so WebSocket handler has fresh flag
   setInterval(checkDaemon, 30000);
-  // Check for restore after Kimi starts, then begin backups
-  setTimeout(() => {
-    checkAndRestore();
-    startBackupScheduler();
-  }, 20000); // 20s delay to let Kimi initialize
+  log('💾 Backups disabled (execSync blocks event loop)');
+  // NOTE: Backups are disabled because execSync blocks the event loop,
+  // causing the server to become unresponsive for minutes.
+  // setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
+});
+
+// Crash recovery — prevent event-loop-blocking backup from killing the server
+process.on('uncaughtException', (err) => {
+  log(`🔥 UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}`);
+});
+process.on('unhandledRejection', (reason) => {
+  log(`⚠️ UNHANDLED REJECTION: ${reason}`);
 });
 
 // Graceful shutdown
