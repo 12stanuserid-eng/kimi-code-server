@@ -44,6 +44,8 @@ let lastBackupStatus = 'never';
 
 function log(m) {
   debugLog.push(`[${new Date().toISOString()}] ${m}`);
+  // Prevent memory leak — keep last 200 lines
+  if (debugLog.length > 200) debugLog = debugLog.slice(-200);
   console.error(m);
 }
 
