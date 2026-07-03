@@ -375,24 +375,41 @@ const server = http.createServer((req, res) => {
 
 // ====== WebSocket Proxy for Kimi daemon (raw TCP tunnel) ======
 server.on('upgrade', (req, socket, head) => {
-  if (!daemonAlive) { socket.destroy(); return; }
-
-  // Build the exact HTTP upgrade request to forward (override host)
-  let reqLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (k !== 'host') reqLine += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
-  }
-  reqLine += `host: 127.0.0.1:${KIMI_PORT}\r\n\r\n`;
-
+  // Always attempt the connection — don't rely on stale daemonAlive flag
   const proxySocket = net.connect(KIMI_PORT, '127.0.0.1', () => {
+    log(`⬆️ WebSocket upgrade: ${req.url}`);
+    // Build the exact HTTP upgrade request to forward (override host)
+    let reqLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (k !== 'host') reqLine += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
+    }
+    reqLine += `host: 127.0.0.1:${KIMI_PORT}\r\n\r\n`;
+
     proxySocket.write(reqLine);
     if (head && head.length) proxySocket.write(head);
     proxySocket.pipe(socket);
     socket.pipe(proxySocket);
   });
 
-  proxySocket.on('error', () => { socket.destroy(); });
-  socket.on('error', () => { proxySocket.destroy(); });
+  proxySocket.on('error', (err) => {
+    log(`❌ WebSocket proxy error: ${err.message}`);
+    daemonAlive = false;
+    socket.destroy();
+  });
+
+  socket.on('error', (err) => {
+    log(`❌ Client WebSocket error: ${err.message}`);
+    proxySocket.destroy();
+  });
+
+  // Timeout so browser doesn't hang forever if daemon is dead
+  proxySocket.setTimeout(5000);
+  proxySocket.on('timeout', () => {
+    log('❌ WebSocket proxy timeout (5s) — daemon likely dead');
+    daemonAlive = false;
+    proxySocket.destroy();
+    socket.destroy();
+  });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -400,6 +417,8 @@ server.listen(PORT, '0.0.0.0', () => {
   log(`Server on :${PORT}, Kimi on :${KIMI_PORT}`);
   startKimi();
   startKeepalive();
+  // Periodic daemon health check (every 30s) so WebSocket handler has fresh flag
+  setInterval(checkDaemon, 30000);
   // Check for restore after Kimi starts, then begin backups
   setTimeout(() => {
     checkAndRestore();
