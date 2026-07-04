@@ -606,20 +606,28 @@ server.on('upgrade', (req, socket, head) => {
             daemonAlive = true;
 
             // Write the HTTP response head back to the client
-            // The client socket expects the 101 response head followed by the data stream
             socket.write(responseBuffer);
           } else {
-            // Unexpected response — log and close
-            log(`❌ Unexpected upgrade response: ${firstLine}`);
-            socket.destroy();
+            // Log full response headers for debugging
+            const responseHeaders = headerStr.split('\r\n').slice(1).join(' | ');
+            log(`❌ Upgrade rejected: ${firstLine} | ${responseHeaders}`);
+            const body = responseBuffer.slice(headerEnd + 4).toString().trim();
+            if (body) log(`❌ Rejection body: ${body}`);
+            // Send 502 to client so browser gets meaningful error
+            try {
+              socket.write('HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nBad Gateway: Kimi daemon rejected WebSocket upgrade');
+              socket.end();
+            } catch(e) {}
             proxySocket.destroy();
             return;
           }
 
           // Forward any remaining data (past the HTTP headers) to the client
-          const bodyStart = headerEnd + 4; // Skip past \r\n\r\n
+          const bodyStart = headerEnd + 4;
           if (bodyStart < responseBuffer.length) {
-            socket.write(responseBuffer.slice(bodyStart));
+            // Prepend the 101 response head + remaining data
+            const headOnly = responseBuffer.slice(0, headerEnd + 4);
+            socket.write(headOnly);
           }
 
           // Bidirectional pipe
