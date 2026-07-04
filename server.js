@@ -586,9 +586,8 @@ server.on('upgrade', (req, socket, head) => {
       } else if (key === 'origin') {
         // Rewrite Origin to match the rewritten Host — daemon validates Origin too
         proxySocket.write(`origin: http://localhost:${KIMI_PORT}\r\n`);
-      } else if (key === 'sec-websocket-protocol' || key === 'sec-websocket-key') {
-        // Skip — we inject these below to avoid duplicates
-        // (sec-websocket-key is handled via raw head bytes)
+      } else if (key === 'sec-websocket-protocol') {
+        // Skip — we inject our own version below to avoid duplicates
       } else {
         proxySocket.write(`${key}: ${value}\r\n`);
       }
@@ -598,7 +597,7 @@ server.on('upgrade', (req, socket, head) => {
     proxySocket.write(`authorization: Bearer ${FIXED_TOKEN}\r\n`);
     proxySocket.write('\r\n');
 
-    // Forward the initial WebSocket handshake data (Sec-WebSocket-Key, extensions, etc.)
+    // Forward any remaining upgrade body data (typically empty for WebSocket)
     if (head && head.length > 0) {
       proxySocket.write(head);
     }
