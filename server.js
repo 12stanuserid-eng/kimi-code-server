@@ -569,10 +569,16 @@ server.on('upgrade', (req, socket, head) => {
       } else if (key === 'connection') {
         // Ensure connection: upgrade is preserved
         proxySocket.write(`connection: upgrade\r\n`);
+      } else if (key === 'sec-websocket-protocol') {
+        // Already has a protocol — keep it (browser may send one)
+        proxySocket.write(`sec-websocket-protocol: ${value}\r\n`);
       } else {
         proxySocket.write(`${key}: ${value}\r\n`);
       }
     }
+    // Inject Kimi auth token for WebSocket upgrade — required by Kimi daemon
+    proxySocket.write(`sec-websocket-protocol: kimi-code.bearer.${FIXED_TOKEN}\r\n`);
+    proxySocket.write(`authorization: Bearer ${FIXED_TOKEN}\r\n`);
     proxySocket.write('\r\n');
 
     // Forward the initial WebSocket handshake data (Sec-WebSocket-Key, extensions, etc.)
