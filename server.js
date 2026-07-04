@@ -587,13 +587,13 @@ server.on('upgrade', (req, socket, head) => {
         // Rewrite Origin to match the rewritten Host — daemon validates Origin too
         proxySocket.write(`origin: http://localhost:${KIMI_PORT}\r\n`);
       } else if (key === 'sec-websocket-protocol') {
-        // Skip — we inject our own version below to avoid duplicates
+        // Forward client's subprotocol if present (browser sends none, CLI sends bearer token)
+        proxySocket.write(`sec-websocket-protocol: ${value}\r\n`);
       } else {
         proxySocket.write(`${key}: ${value}\r\n`);
       }
     }
-    // Inject Kimi auth token for WebSocket upgrade — required by Kimi daemon
-    proxySocket.write(`sec-websocket-protocol: kimi-code.bearer.${FIXED_TOKEN}\r\n`);
+    // Inject Authorization header as fallback auth for Kimi daemon
     proxySocket.write(`authorization: Bearer ${FIXED_TOKEN}\r\n`);
     proxySocket.write('\r\n');
 
