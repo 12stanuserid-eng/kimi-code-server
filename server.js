@@ -546,43 +546,52 @@ const server = http.createServer((req, res) => {
   res.end(STARTING_HTML);
 });
 
-// ====== WebSocket Proxy for Kimi daemon (raw TCP tunnel) ======
+// ====== WebSocket Proxy for Kimi daemon (via http.request) ======
 server.on('upgrade', (req, socket, head) => {
-  // Always attempt the connection — don't rely on stale daemonAlive flag
-  const proxySocket = net.connect(KIMI_PORT, '127.0.0.1', () => {
-    log(`⬆️ WebSocket upgrade: ${req.url}`);
-    // Build the exact HTTP upgrade request to forward (override host)
-    let reqLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (k !== 'host') reqLine += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
-    }
-    reqLine += `host: 127.0.0.1:${KIMI_PORT}\r\n\r\n`;
+  log(`⬆️ WebSocket upgrade: ${req.url}`);
+  // Use http.request which properly handles the WebSocket upgrade flow
+  const opts = {
+    hostname: '127.0.0.1',
+    port: KIMI_PORT,
+    path: req.url,
+    method: 'GET',
+    headers: {
+      ...req.headers,
+      host: `127.0.0.1:${KIMI_PORT}`,
+      connection: 'upgrade',
+    },
+    timeout: 5000,
+  };
 
-    proxySocket.write(reqLine);
-    if (head && head.length) proxySocket.write(head);
-    proxySocket.pipe(socket);
-    socket.pipe(proxySocket);
+  const pr = http.request(opts);
+
+  pr.on('upgrade', (prRes, prSocket, prHead) => {
+    log(`✅ WebSocket upgraded to ${req.url}`);
+    daemonAlive = true;
+    // Forward any initial data from the daemon
+    if (prHead && prHead.length) socket.write(prHead);
+    // Bidirectional pipe
+    prSocket.pipe(socket);
+    socket.pipe(prSocket);
+    // Log errors
+    prSocket.on('error', (err) => log(`❌ Daemon WebSocket: ${err.message}`));
+    socket.on('error', (err) => log(`❌ Client WebSocket: ${err.message}`));
   });
 
-  proxySocket.on('error', (err) => {
+  pr.on('error', (err) => {
     log(`❌ WebSocket proxy error: ${err.message}`);
     daemonAlive = false;
     socket.destroy();
   });
 
-  socket.on('error', (err) => {
-    log(`❌ Client WebSocket error: ${err.message}`);
-    proxySocket.destroy();
-  });
-
-  // Timeout so browser doesn't hang forever if daemon is dead
-  proxySocket.setTimeout(5000);
-  proxySocket.on('timeout', () => {
-    log('❌ WebSocket proxy timeout (5s) — daemon likely dead');
+  pr.on('timeout', () => {
+    log('❌ WebSocket proxy timeout (5s)');
+    pr.destroy();
     daemonAlive = false;
-    proxySocket.destroy();
     socket.destroy();
   });
+
+  pr.end();
 });
 
 server.listen(PORT, '0.0.0.0', () => {
