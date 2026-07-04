@@ -1,7 +1,5 @@
 node_modules/
-.env
+pentaract/target/
+Dockerfile.backup
+Dockerfile.minimal
 *.log
-dist/
-.DS_Store
-*.pid
-.kimi-code/logs/*.log

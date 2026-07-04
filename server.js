@@ -324,8 +324,9 @@ function startCloudflareTunnel() {
     log(`✅ cloudflared already exists at ${cloudflaredPath}`);
   }
 
-  // Start tunnel — binds to our Node.js proxy (which handles Host header rewriting)
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'];
+  // Start tunnel — point directly to Kimi daemon (port 10001) for native WS support
+  // The daemon serves the full web UI + API + WebSocket, no proxy needed
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${KIMI_PORT}`, '--no-autoupdate'];
   log(`🚇 Starting Cloudflare Tunnel: ${cloudflaredPath} ${tunnelArgs.join(' ')}`);
 
   const proc = spawn(cloudflaredPath, tunnelArgs, {
@@ -413,7 +414,7 @@ const server = http.createServer((req, res) => {
       tunnel_url: tunnelUrl,
       tunnel_alive: tunnelAlive,
       message: tunnelUrl
-        ? `Use this URL in your browser for WebSocket support: ${tunnelUrl}`
+        ? `Direct daemon URL (bypasses proxy, supports WS natively): ${tunnelUrl}`
         : 'Tunnel not yet ready — wait ~30s and refresh'
     }));
   }
@@ -562,6 +563,7 @@ server.on('upgrade', (req, socket, head) => {
     proxySocket.write(requestLine);
 
     // Write all headers — forward the original client headers exactly
+    // IMPORTANT: skip sec-websocket-protocol from incoming request to avoid duplicates
     for (const [key, value] of Object.entries(req.headers)) {
       if (key === 'host') {
         // Keep original Host header — daemon may validate it against the token
@@ -569,9 +571,9 @@ server.on('upgrade', (req, socket, head) => {
       } else if (key === 'connection') {
         // Ensure connection: upgrade is preserved
         proxySocket.write(`connection: upgrade\r\n`);
-      } else if (key === 'sec-websocket-protocol') {
-        // Already has a protocol — keep it (browser may send one)
-        proxySocket.write(`sec-websocket-protocol: ${value}\r\n`);
+      } else if (key === 'sec-websocket-protocol' || key === 'sec-websocket-key') {
+        // Skip — we inject these below to avoid duplicates
+        // (sec-websocket-key is handled via raw head bytes)
       } else {
         proxySocket.write(`${key}: ${value}\r\n`);
       }

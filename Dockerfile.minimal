@@ -1,0 +1,5 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY entrypoint.sh /entrypoint.sh
+RUN echo "test" > /test.txt
+CMD ["cat", "/test.txt"]
