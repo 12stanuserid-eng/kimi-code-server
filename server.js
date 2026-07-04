@@ -324,8 +324,8 @@ function startCloudflareTunnel() {
     log(`✅ cloudflared already exists at ${cloudflaredPath}`);
   }
 
-  // Start tunnel — binds to Kimi daemon port
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${KIMI_PORT}`, '--no-autoupdate'];
+  // Start tunnel — binds to our Node.js proxy (which handles Host header rewriting)
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'];
   log(`🚇 Starting Cloudflare Tunnel: ${cloudflaredPath} ${tunnelArgs.join(' ')}`);
 
   const proc = spawn(cloudflaredPath, tunnelArgs, {
