@@ -564,8 +564,8 @@ server.on('upgrade', (req, socket, head) => {
     // Write all headers — forward the original client headers exactly
     for (const [key, value] of Object.entries(req.headers)) {
       if (key === 'host') {
-        // Override host to point at the daemon
-        proxySocket.write(`host: ${targetHost}:${targetPort}\r\n`);
+        // Keep original Host header — daemon may validate it against the token
+        proxySocket.write(`host: ${value}\r\n`);
       } else if (key === 'connection') {
         // Ensure connection: upgrade is preserved
         proxySocket.write(`connection: upgrade\r\n`);
