@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Kimi Code Render Server v5 — Proper Auth + Always-Alive 💪
+ * Kimi Code Render Server v6 — Tunnel + WebSocket Fix 🚇
  * - Uses `kimi server run --foreground` (no daemon mode — process stays alive)
  * - Forces KIMI_CODE_PASSWORD if not set in env
  * - Auto-restarts Kimi on crash with exponential backoff
@@ -29,6 +29,8 @@ let daemonAlive = false;
 let myPublicUrl = null;
 let kimiProc = null;
 let restartTimer = null;
+let tunnelProc = null;
+let tunnelUrl = null;
 
 // ====== PENTARACT BACKUP CONSTANTS ======
 const PENTARACT_URL = process.env.PENTARACT_URL || 'https://pentaract-f4ga.onrender.com';
@@ -292,6 +294,84 @@ function startBackupScheduler() {
   setInterval(performBackup, BACKUP_INTERVAL_MIN * 60 * 1000);
 }
 
+// ====== CLOUDFLARE TUNNEL (trycloudflare) ======
+function startCloudflareTunnel() {
+  const arch = os.arch();
+  const platform = os.platform();
+  let downloadUrl;
+  const binaryName = `cloudflared-${platform}-${arch}`;
+  if (platform === 'linux' && arch === 'x64') downloadUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
+  else if (platform === 'linux' && arch === 'arm64') downloadUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64';
+  else if (platform === 'darwin' && arch === 'x64') downloadUrl = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64';
+  else {
+    log(`❌ Unsupported platform for cloudflared tunnel: ${platform}/${arch}`);
+    return;
+  }
+
+  const cloudflaredPath = '/tmp/cloudflared';
+
+  // Download if not exists
+  if (!fs.existsSync(cloudflaredPath)) {
+    try {
+      log(`⬇️ Downloading cloudflared from ${downloadUrl}`);
+      execSync(`curl -sL "${downloadUrl}" -o ${cloudflaredPath} && chmod +x ${cloudflaredPath}`, { timeout: 60000 });
+      log(`✅ cloudflared downloaded (${fs.statSync(cloudflaredPath).size} bytes)`);
+    } catch (err) {
+      log(`❌ Failed to download cloudflared: ${err.message}`);
+      return;
+    }
+  } else {
+    log(`✅ cloudflared already exists at ${cloudflaredPath}`);
+  }
+
+  // Start tunnel — binds to Kimi daemon port
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${KIMI_PORT}`, '--no-autoupdate'];
+  log(`🚇 Starting Cloudflare Tunnel: ${cloudflaredPath} ${tunnelArgs.join(' ')}`);
+
+  const proc = spawn(cloudflaredPath, tunnelArgs, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, HOME: process.env.HOME || '/root' }
+  });
+
+  tunnelProc = proc;
+
+  proc.stdout.on('data', d => {
+    const t = d.toString();
+    // Trycloudflare prints the URL: https://xxxxx.trycloudflare.com
+    const match = t.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    if (match) {
+      tunnelUrl = match[0];
+      log(`✅ Tunnel URL: ${tunnelUrl}`);
+      log(`🌐 Access with WebSocket: ${tunnelUrl}`);
+    }
+    const line = t.trim();
+    if (line) log(`[tunnel] ${line.substring(0, 200)}`);
+  });
+
+  proc.stderr.on('data', d => {
+    const t = d.toString();
+    const match = t.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    if (match) {
+      tunnelUrl = match[0];
+      log(`✅ Tunnel URL: ${tunnelUrl}`);
+    }
+    const line = t.trim();
+    if (line) log(`[tunnel] ${line.substring(0, 200)}`);
+  });
+
+  proc.on('error', err => {
+    log(`❌ Tunnel spawn error: ${err.message}`);
+    tunnelUrl = null;
+  });
+
+  proc.on('exit', (code, sig) => {
+    tunnelProc = null;
+    tunnelUrl = null;
+    log(`⚠️ Tunnel exited (code=${code}) — restarting in 10s`);
+    setTimeout(() => startCloudflareTunnel(), 10000);
+  });
+}
+
 // ====== HTTP SERVER ======
 const server = http.createServer((req, res) => {
   // Record public URL from first external request
@@ -322,6 +402,19 @@ const server = http.createServer((req, res) => {
       url: myPublicUrl || 'not yet',
       uptime: process.uptime(),
       kimi_process_alive: kimiProc !== null && !kimiProc.killed
+    }));
+  }
+
+  // Tunnel URL endpoint
+  if (req.url === '/tunnel-url') {
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    const tunnelAlive = tunnelProc !== null && !tunnelProc.killed;
+    return res.end(JSON.stringify({
+      tunnel_url: tunnelUrl,
+      tunnel_alive: tunnelAlive,
+      message: tunnelUrl
+        ? `Use this URL in your browser for WebSocket support: ${tunnelUrl}`
+        : 'Tunnel not yet ready — wait ~30s and refresh'
     }));
   }
 
@@ -499,11 +592,10 @@ server.listen(PORT, '0.0.0.0', () => {
   startKeepalive();
   // Periodic daemon health check (every 30s) so WebSocket handler has fresh flag
   setInterval(checkDaemon, 30000);
+  // Start Cloudflare Tunnel after 10s (gives Kimi daemon time to start)
+  setTimeout(startCloudflareTunnel, 10000);
   log('💾 Backups disabled (execSync blocks event loop)');
-  // Warn about Cloudflare WebSocket limitation
-  log('⚠️ WebSocket: Cloudflare on *.onrender.com blocks WS upgrades (Origin check).');
-  log('   Fix: Use a custom domain with Cloudflare proxy DISABLED (gray cloud DNS).');
-  log('   See /ws-diagnostics endpoint for detailed info.');
+  log('🚇 Cloudflare Tunnel will start in 10s — check /tunnel-url for the URL');
   // NOTE: Backups are disabled because execSync blocks the event loop,
   // causing the server to become unresponsive for minutes.
   // setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
@@ -522,6 +614,9 @@ process.on('SIGTERM', () => {
   log('SIGTERM received, shutting down...');
   if (kimiProc && !kimiProc.killed) {
     kimiProc.kill('SIGTERM');
+  }
+  if (tunnelProc && !tunnelProc.killed) {
+    tunnelProc.kill('SIGTERM');
   }
   setTimeout(() => process.exit(0), 3000);
 });
