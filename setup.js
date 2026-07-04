@@ -36,8 +36,12 @@ function loadExistingKeys() {
 const existingKeys = loadExistingKeys();
 
 // Helper: get key from env var, then existing config, then fallback
-function getKey(envVar, provider, fallback) {
+// Checks primary env var first, then optional alt env vars
+function getKey(envVar, provider, fallback, ...altEnvVars) {
   if (process.env[envVar]) return process.env[envVar];
+  for (const alt of altEnvVars) {
+    if (process.env[alt]) return process.env[alt];
+  }
   if (existingKeys[provider]) return existingKeys[provider];
   return fallback;
 }
@@ -61,7 +65,7 @@ server_password = "VNE1wpc7gqGD1THY-Np6WRPYdU5LlOrk3ICvxsy_N58"
 
 [providers.opencode]
 type = "openai"
-apiKey = "${getKey('OPENCODE_API_KEY', 'opencode', 'no-auth')}"
+apiKey = "${getKey('OPENCODE_API_KEY', 'opencode', 'no-auth', 'OPENAI_API_KEY')}"
 base_url = "https://opencode.ai/zen/v1"
 
 [providers.opencode.env]
