@@ -546,52 +546,111 @@ const server = http.createServer((req, res) => {
   res.end(STARTING_HTML);
 });
 
-// ====== WebSocket Proxy for Kimi daemon (via http.request) ======
+// ====== WebSocket Proxy for Kimi daemon (via raw TCP) ======
 server.on('upgrade', (req, socket, head) => {
   log(`⬆️ WebSocket upgrade: ${req.url}`);
-  // Use http.request which properly handles the WebSocket upgrade flow
-  const opts = {
-    hostname: '127.0.0.1',
-    port: KIMI_PORT,
-    path: req.url,
-    method: 'GET',
-    headers: {
-      ...req.headers,
-      host: `127.0.0.1:${KIMI_PORT}`,
-      connection: 'upgrade',
-    },
-    timeout: 5000,
-  };
 
-  const pr = http.request(opts);
+  const targetPort = KIMI_PORT;
+  const targetHost = '127.0.0.1';
 
-  pr.on('upgrade', (prRes, prSocket, prHead) => {
-    log(`✅ WebSocket upgraded to ${req.url}`);
-    daemonAlive = true;
-    // Forward any initial data from the daemon
-    if (prHead && prHead.length) socket.write(prHead);
-    // Bidirectional pipe
-    prSocket.pipe(socket);
-    socket.pipe(prSocket);
-    // Log errors
-    prSocket.on('error', (err) => log(`❌ Daemon WebSocket: ${err.message}`));
-    socket.on('error', (err) => log(`❌ Client WebSocket: ${err.message}`));
+  // Open raw TCP connection to Kimi daemon
+  const proxySocket = net.connect(targetPort, targetHost, () => {
+    log(`✅ TCP connected to ${targetHost}:${targetPort}`);
+
+    // Manually write the HTTP upgrade request (no http.request wrapper)
+    const requestLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
+    proxySocket.write(requestLine);
+
+    // Write all headers — forward the original client headers exactly
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (key === 'host') {
+        // Override host to point at the daemon
+        proxySocket.write(`host: ${targetHost}:${targetPort}\r\n`);
+      } else if (key === 'connection') {
+        // Ensure connection: upgrade is preserved
+        proxySocket.write(`connection: upgrade\r\n`);
+      } else {
+        proxySocket.write(`${key}: ${value}\r\n`);
+      }
+    }
+    proxySocket.write('\r\n');
+
+    // Forward the initial WebSocket handshake data (Sec-WebSocket-Key, extensions, etc.)
+    if (head && head.length > 0) {
+      proxySocket.write(head);
+    }
+
+    // Read the daemon's response — first line tells us if upgrade succeeded
+    let responseBuffer = Buffer.alloc(0);
+    let responseComplete = false;
+
+    proxySocket.on('data', (data) => {
+      if (!responseComplete) {
+        responseBuffer = Buffer.concat([responseBuffer, data]);
+
+        // Check if we have the full HTTP response head (ends with \r\n\r\n)
+        const headerEnd = responseBuffer.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          responseComplete = true;
+          const headerStr = responseBuffer.slice(0, headerEnd).toString();
+          const firstLine = headerStr.split('\r\n')[0];
+
+          if (firstLine.includes('101')) {
+            log(`✅ Kimi daemon accepted WebSocket upgrade: ${firstLine}`);
+            daemonAlive = true;
+
+            // Write the HTTP response head back to the client
+            // The client socket expects the 101 response head followed by the data stream
+            socket.write(responseBuffer);
+          } else {
+            // Unexpected response — log and close
+            log(`❌ Unexpected upgrade response: ${firstLine}`);
+            socket.destroy();
+            proxySocket.destroy();
+            return;
+          }
+
+          // Forward any remaining data (past the HTTP headers) to the client
+          const bodyStart = headerEnd + 4; // Skip past \r\n\r\n
+          if (bodyStart < responseBuffer.length) {
+            socket.write(responseBuffer.slice(bodyStart));
+          }
+
+          // Bidirectional pipe
+          proxySocket.pipe(socket);
+          socket.pipe(proxySocket);
+        }
+      }
+    });
+
+    // Timeout for the upgrade handshake
+    setTimeout(() => {
+      if (!responseComplete) {
+        log('❌ WebSocket upgrade handshake timeout (5s)');
+        socket.destroy();
+        proxySocket.destroy();
+      }
+    }, 5000);
   });
 
-  pr.on('error', (err) => {
-    log(`❌ WebSocket proxy error: ${err.message}`);
+  proxySocket.on('error', (err) => {
+    log(`❌ WebSocket TCP error: ${err.message}`);
     daemonAlive = false;
     socket.destroy();
   });
 
-  pr.on('timeout', () => {
-    log('❌ WebSocket proxy timeout (5s)');
-    pr.destroy();
-    daemonAlive = false;
-    socket.destroy();
+  socket.on('error', (err) => {
+    log(`❌ Client WebSocket error: ${err.message}`);
+    proxySocket.destroy();
   });
 
-  pr.end();
+  // Clean up on close
+  socket.on('close', () => {
+    try { proxySocket.destroy(); } catch(e) {}
+  });
+  proxySocket.on('close', () => {
+    try { socket.destroy(); } catch(e) {}
+  });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
