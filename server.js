@@ -573,28 +573,30 @@ server.on('upgrade', (req, socket, head) => {
     const requestLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
     proxySocket.write(requestLine);
 
-    // Write all headers — forward the original client headers exactly
-    // IMPORTANT: skip sec-websocket-protocol from incoming request to avoid duplicates
+    // Forward client headers, but ensure the right auth for Kimi daemon
+    // Kimi daemon expects the token in sec-websocket-protocol header, NOT Authorization
+    let hasSecWebSocketProtocol = false;
     for (const [key, value] of Object.entries(req.headers)) {
-      if (key === 'host') {
-        // Rewrite Host to localhost:10001 so the Kimi daemon accepts the upgrade
-        // (daemon validates Host header against allowed hosts list)
-        proxySocket.write(`host: localhost:${KIMI_PORT}\r\n`);
-      } else if (key === 'connection') {
-        // Ensure connection: upgrade is preserved
+      const lower = key.toLowerCase();
+      if (lower === 'connection') {
         proxySocket.write(`connection: upgrade\r\n`);
-      } else if (key === 'origin') {
-        // Rewrite Origin to match the rewritten Host — daemon validates Origin too
-        proxySocket.write(`origin: http://localhost:${KIMI_PORT}\r\n`);
-      } else if (key === 'sec-websocket-protocol') {
-        // Forward client's subprotocol if present (browser sends none, CLI sends bearer token)
+      } else if (lower === 'sec-websocket-protocol') {
+        hasSecWebSocketProtocol = true;
         proxySocket.write(`sec-websocket-protocol: ${value}\r\n`);
+      } else if (lower === 'authorization') {
+        // Skip — we handle auth via sec-websocket-protocol below
+        continue;
+      } else if (lower === 'host' || lower === 'origin') {
+        // Forward original host/origin — KIMI_CODE_ALLOWED_HOSTS includes them
+        proxySocket.write(`${key}: ${value}\r\n`);
       } else {
         proxySocket.write(`${key}: ${value}\r\n`);
       }
     }
-    // Inject Authorization header as fallback auth for Kimi daemon
-    proxySocket.write(`authorization: Bearer ${FIXED_TOKEN}\r\n`);
+    // Ensure sec-websocket-protocol is set — Kimi daemon requires it for auth
+    if (!hasSecWebSocketProtocol) {
+      proxySocket.write(`sec-websocket-protocol: ${FIXED_TOKEN}\r\n`);
+    }
     proxySocket.write('\r\n');
 
     // Forward any remaining upgrade body data (typically empty for WebSocket)
