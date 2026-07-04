@@ -336,9 +336,8 @@ function startCloudflareTunnel() {
     log(`✅ cloudflared already exists at ${cloudflaredPath}`);
   }
 
-  // Start tunnel — point directly to Kimi daemon (port 10001) for native WS support
-  // The daemon serves the full web UI + API + WebSocket, no proxy needed
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${KIMI_PORT}`, '--no-autoupdate'];
+  // Start tunnel — point to our Node proxy (port 10000) which rewrites Host headers for WS
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'];
   log(`🚇 Starting Cloudflare Tunnel: ${cloudflaredPath} ${tunnelArgs.join(' ')}`);
 
   const proc = spawn(cloudflaredPath, tunnelArgs, {
@@ -578,11 +577,15 @@ server.on('upgrade', (req, socket, head) => {
     // IMPORTANT: skip sec-websocket-protocol from incoming request to avoid duplicates
     for (const [key, value] of Object.entries(req.headers)) {
       if (key === 'host') {
-        // Keep original Host header — daemon may validate it against the token
-        proxySocket.write(`host: ${value}\r\n`);
+        // Rewrite Host to localhost:10001 so the Kimi daemon accepts the upgrade
+        // (daemon validates Host header against allowed hosts list)
+        proxySocket.write(`host: localhost:${KIMI_PORT}\r\n`);
       } else if (key === 'connection') {
         // Ensure connection: upgrade is preserved
         proxySocket.write(`connection: upgrade\r\n`);
+      } else if (key === 'origin') {
+        // Rewrite Origin to match the rewritten Host — daemon validates Origin too
+        proxySocket.write(`origin: http://localhost:${KIMI_PORT}\r\n`);
       } else if (key === 'sec-websocket-protocol' || key === 'sec-websocket-key') {
         // Skip — we inject these below to avoid duplicates
         // (sec-websocket-key is handled via raw head bytes)
