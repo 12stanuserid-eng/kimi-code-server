@@ -113,10 +113,22 @@ function startKimi() {
     .find(p => { try { return fs.existsSync(p); } catch(e) { return false; } }) || 'npx';
 
   // Force KIMI_CODE_PASSWORD — always use FIXED_TOKEN regardless of Render env vars
+  // Allow all known hosts — the daemon rejects WebSocket upgrades from unknown hosts
+  const allowedHosts = [
+    'kimicode.dpdns.org',
+    'kimi-code-server.onrender.com',
+    'localhost:10001',
+    'localhost',
+    '127.0.0.1:10001',
+    '127.0.0.1',
+    '*.trycloudflare.com',
+    '*.onrender.com'
+  ].join(',');
   const kimiEnv = {
     ...process.env,
     HOME: process.env.HOME || '/root',
     KIMI_CODE_PASSWORD: FIXED_TOKEN,
+    KIMI_CODE_ALLOWED_HOSTS: allowedHosts,
   };
 
   // Use `server run --foreground` — never daemonizes, process stays alive
