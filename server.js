@@ -36,7 +36,7 @@ let tunnelUrl = null;
 const PENTARACT_URL = process.env.PENTARACT_URL || 'https://pentaract-f4ga.onrender.com';
 const PENTARACT_EMAIL = process.env.PENTARACT_EMAIL || 'admin@pentaract.com';
 const PENTARACT_PASS = process.env.PENTARACT_PASS || 'admin123';
-const BACKUP_STORAGE_ID = process.env.BACKUP_STORAGE_ID || 'ad11ad52-b218-4a1d-a661-16655d8bbbf2';
+const BACKUP_STORAGE_ID = process.env.BACKUP_STORAGE_ID || 'd875641e-ac08-4794-9d3b-823dd2705981';
 const BACKUP_INTERVAL_MIN = parseInt(process.env.BACKUP_INTERVAL_MIN) || 30;
 const KIMI_HOME = process.env['KIMI_CODE_HOME'] || path.join(os.homedir(), '.kimi-code');
 
@@ -694,11 +694,10 @@ server.listen(PORT, '0.0.0.0', () => {
   setInterval(checkDaemon, 30000);
   // Start Cloudflare Tunnel after 10s (gives Kimi daemon time to start)
   setTimeout(startCloudflareTunnel, 10000);
-  log('💾 Backups disabled (execSync blocks event loop)');
+  log('💾 Backups enabled — Pentaract persistence active');
   log('🚇 Cloudflare Tunnel will start in 10s — check /tunnel-url for the URL');
-  // NOTE: Backups are disabled because execSync blocks the event loop,
-  // causing the server to become unresponsive for minutes.
-  // setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
+  // Start backup scheduler after 20s (gives Kimi daemon time to initialize)
+  setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
 });
 
 // Crash recovery — prevent event-loop-blocking backup from killing the server
