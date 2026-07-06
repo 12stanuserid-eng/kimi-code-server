@@ -67,7 +67,7 @@ server_password = "VNE1wpc7gqGD1THY-Np6WRPYdU5LlOrk3ICvxsy_N58"
 
 [providers.opencode]
 type = "openai"
-apiKey = "${getKey('OPENCODE_API_KEY', 'opencode', 'sk-4yUcUjpt9DuWw7WbHzXtHkMzdLW6QxQPoBZ6mvmI89ljuCSMe0Ac9UtVekDMynfz', 'OPENAI_API_KEY')}"
+apiKey = "${getKey('OPENCODE_API_KEY', 'opencode', 'sk-4yUcUjpt9DuWw7WbHzXtHkMzdLW6QxQPoBZ6mvmI89ljuCSMe0Ac9UtVekDMynfz')}"
 base_url = "https://opencode.ai/zen/v1"
 
 [providers.opencode.env]
