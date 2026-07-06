@@ -370,7 +370,8 @@ function startCloudflareTunnel() {
   }
 
   // Start tunnel — point to our Node proxy (port 10000) which rewrites Host headers for WS
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'];
+  // Use --protocol http2 for stable WebSocket connections (QUIC has UDP buffer issues on Render)
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--protocol', 'http2', '--no-autoupdate'];
   log(`🚇 Starting Cloudflare Tunnel: ${cloudflaredPath} ${tunnelArgs.join(' ')}`);
 
   const proc = spawn(cloudflaredPath, tunnelArgs, {
@@ -654,9 +655,83 @@ const server = http.createServer((req, res) => {
   res.end(STARTING_HTML);
 });
 
+// ====== Session Reconnect Grace — keeps daemon socket alive on page refresh ======
+// Map: client_id -> { proxySocket, timer }
+const pendingReconnect = {};
+
+function getClientId(url) {
+  if (!url) return null;
+  const m = url.match(/[?&]client_id=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function cleanupPendingReconnect(clientId) {
+  const entry = pendingReconnect[clientId];
+  if (entry) {
+    if (entry.timer) clearTimeout(entry.timer);
+    delete pendingReconnect[clientId];
+  }
+}
+
 // ====== WebSocket Proxy for Kimi daemon (via raw TCP) ======
 server.on('upgrade', (req, socket, head) => {
   log(`⬆️ WebSocket upgrade: ${req.url}`);
+
+  const clientId = getClientId(req.url);
+  if (clientId) log(`  👤 client_id=${clientId}`);
+
+  // Check if we already have a daemon socket for this client (page refresh / reconnect)
+  const existing = clientId ? pendingReconnect[clientId] : null;
+  if (existing && existing.proxySocket && !existing.proxySocket.destroyed && existing.proxySocket.writable) {
+    log(`  ♻️ Reusing existing daemon socket for ${clientId}`);
+    cleanupPendingReconnect(clientId);
+
+    const proxySocket = existing.proxySocket;
+
+    // Unpipe anything still connected (should be nothing, but be safe)
+    proxySocket.unpipe();
+    proxySocket.removeAllListeners('data');
+
+    // Write a fresh HTTP upgrade response to the new browser socket
+    const upgradeResp = 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n';
+    socket.write(upgradeResp);
+
+    // Enable keepalive
+    proxySocket.setKeepAlive(true, 10000);
+    socket.setKeepAlive(true, 10000);
+
+    // Bidirectional pipe
+    proxySocket.pipe(socket);
+    socket.pipe(proxySocket);
+
+    // Client close → 30s grace
+    socket.on('close', () => {
+      log(`  ⏳ Client ${clientId} disconnected, keeping daemon socket for 30s`);
+      socket.unpipe();
+      proxySocket.unpipe();
+      const timer = setTimeout(() => {
+        log(`  ⌛ Grace period expired for ${clientId}, destroying daemon socket`);
+        cleanupPendingReconnect(clientId);
+        try { proxySocket.destroy(); } catch(e) {}
+      }, 30000);
+      pendingReconnect[clientId] = { proxySocket, timer };
+    });
+
+    // Daemon close → destroy both
+    proxySocket.on('close', () => {
+      cleanupPendingReconnect(clientId);
+      try { socket.destroy(); } catch(e) {}
+    });
+
+    // Error handlers
+    socket.on('error', () => {});
+    proxySocket.on('error', () => {});
+
+    return;
+  }
+
+  // Clean up any stale entry
+  if (clientId) cleanupPendingReconnect(clientId);
 
   const targetPort = KIMI_PORT;
   const targetHost = '127.0.0.1';
@@ -744,6 +819,10 @@ server.on('upgrade', (req, socket, head) => {
             socket.write(headOnly);
           }
 
+          // Enable TCP keepalive on both ends to prevent idle disconnects
+          proxySocket.setKeepAlive(true, 10000);
+          socket.setKeepAlive(true, 10000);
+
           // Bidirectional pipe
           proxySocket.pipe(socket);
           socket.pipe(proxySocket);
@@ -772,17 +851,32 @@ server.on('upgrade', (req, socket, head) => {
     proxySocket.destroy();
   });
 
-  // Clean up on close
+  // Client close → 30s grace before destroying daemon socket (allows page refresh)
   socket.on('close', () => {
-    try { proxySocket.destroy(); } catch(e) {}
+    log(`  ⏳ Client ${clientId || 'unknown'} disconnected, keeping daemon socket for 30s`);
+    socket.unpipe();
+    proxySocket.unpipe();
+    const timer = setTimeout(() => {
+      log(`  ⌛ Grace period expired for ${clientId || 'unknown'}, destroying daemon socket`);
+      if (clientId) cleanupPendingReconnect(clientId);
+      try { proxySocket.destroy(); } catch(e) {}
+    }, 30000);
+    if (clientId) pendingReconnect[clientId] = { proxySocket, timer };
   });
+
+  // Daemon close → clean up
   proxySocket.on('close', () => {
+    if (clientId) cleanupPendingReconnect(clientId);
     try { socket.destroy(); } catch(e) {}
   });
+
+  // Error handlers — catch silently to avoid crash on half-closed sockets
+  socket.on('error', () => {});
+  proxySocket.on('error', () => {});
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`=== Kimi Code Render v5 ===`);
+  log(`=== Kimi Code Render v6 ===`);
   log(`Server on :${PORT}, Kimi on :${KIMI_PORT}`);
   startKimi();
   startKeepalive();
