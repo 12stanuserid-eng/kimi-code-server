@@ -104,6 +104,18 @@ async def get_user_from_header(authorization: str = Header(None)) -> dict:
         raise HTTPException(401, detail="Invalid token type")
     return {"id": payload["sub"], "email": payload.get("email", "")}
 
+def get_user_from_refresh_token(authorization: str) -> dict:
+    """Extract user from a refresh token (type='refresh')."""
+    if not authorization:
+        raise HTTPException(401, detail="Missing Authorization header")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, detail="Invalid Authorization header")
+    payload = verify_token(token)
+    if payload.get("type") != "refresh":
+        raise HTTPException(401, detail="Invalid token type, expected refresh token")
+    return {"id": payload["sub"], "email": payload.get("email", "")}
+
 # ─── Telegram helpers ──────────────────────────────────────────────────────
 
 async def tg_upload(data: bytes, name: str) -> str:
@@ -190,7 +202,7 @@ async def login(email: str = Form(...), password: str = Form(...)):
 
 @app.post("/api/auth/refresh")
 async def refresh(authorization: str = Header(None)):
-    user = await get_user_from_header(authorization)
+    user = get_user_from_refresh_token(authorization)
     users = await _supa("GET", "users", params={"id": f"eq.{user['id']}", "select": "email"})
     if not users:
         raise HTTPException(401, detail="User not found")
