@@ -70,9 +70,6 @@ type = "openai"
 apiKey = "${getKey('OPENCODE_API_KEY', 'opencode', 'sk-4yUcUjpt9DuWw7WbHzXtHkMzdLW6QxQPoBZ6mvmI89ljuCSMe0Ac9UtVekDMynfz')}"
 base_url = "https://opencode.ai/zen/v1"
 
-[providers.opencode.env]
-OPENAI_API_KEY = "no-auth"
-
 # ─── BLUESMINDS ──────────────────────────────────────────────
 
 [providers.bluesminds]
