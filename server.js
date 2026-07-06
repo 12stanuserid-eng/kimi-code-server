@@ -274,15 +274,19 @@ function restoreLatestBackup() {
       if (fs.existsSync(wsPath)) {
         const wsData = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
         let patched = false;
-        const renderBase = path.dirname(path.dirname(KIMI_HOME)); // e.g. /opt/render
+        const renderHome = path.dirname(KIMI_HOME); // e.g. /opt/render (user's home on Render)
         for (const [id, ws] of Object.entries(wsData.workspaces || {})) {
           const oldRoot = ws.root || '';
           if (oldRoot === '/root') {
-            ws.root = renderBase;
+            ws.root = renderHome;
+            log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
+            patched = true;
+          } else if (oldRoot === '/root/.kimi-code') {
+            ws.root = KIMI_HOME;
             log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
             patched = true;
           } else if (oldRoot.startsWith('/root/')) {
-            ws.root = oldRoot.replace('/root', renderBase);
+            ws.root = oldRoot.replace('/root', renderHome);
             log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
             patched = true;
           }
