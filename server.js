@@ -539,8 +539,26 @@ const server = http.createServer((req, res) => {
     const pr = http.request(opts, (prRes) => {
       const headers = { ...prRes.headers };
       delete headers['transfer-encoding'];
-      res.writeHead(prRes.statusCode, headers);
-      prRes.pipe(res);
+
+      // Inject workspace ID into HTML responses so sessions persist across browser sessions
+      const ct = (prRes.headers['content-type'] || '').toLowerCase();
+      if (prRes.statusCode === 200 && (ct.includes('text/html') || ct.includes('application/html'))) {
+        let chunks = [];
+        prRes.on('data', c => chunks.push(c));
+        prRes.on('end', () => {
+          let html = Buffer.concat(chunks).toString('utf-8');
+          const wsScript = '<script>\n(function(){\n  var ws = "kimi-workspace-default";\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    if (o.indexOf(ws) === -1) { o.unshift(ws); localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o)); }\n  } catch(e){}\n})();\n</script>';
+          if (html.includes('</body>')) html = html.replace('</body>', wsScript + '\n</body>');
+          else if (html.includes('</html>')) html = html.replace('</html>', wsScript + '\n</html>');
+          else html += wsScript;
+          const out = Buffer.from(html, 'utf-8');
+          res.writeHead(200, { ...headers, 'content-length': out.length });
+          res.end(out);
+        });
+      } else {
+        res.writeHead(prRes.statusCode, headers);
+        prRes.pipe(res);
+      }
     });
 
     pr.on('error', () => {
