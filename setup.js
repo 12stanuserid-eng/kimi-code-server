@@ -35,14 +35,16 @@ function loadExistingKeys() {
 }
 const existingKeys = loadExistingKeys();
 
-// Helper: get key from env var, then existing config, then fallback
+// Helper: get key from env var, then existing config (skip placeholders), then fallback
 // Checks primary env var first, then optional alt env vars
 function getKey(envVar, provider, fallback, ...altEnvVars) {
   if (process.env[envVar]) return process.env[envVar];
   for (const alt of altEnvVars) {
     if (process.env[alt]) return process.env[alt];
   }
-  if (existingKeys[provider]) return existingKeys[provider];
+  // Skip placeholder/no-auth keys from existing config — they cause 401
+  const existing = existingKeys[provider];
+  if (existing && existing !== 'no-auth' && existing !== 'no-auth-required' && !existing.startsWith('YOUR_') && !existing.startsWith('sk-YOUR_')) return existing;
   return fallback;
 }
 
