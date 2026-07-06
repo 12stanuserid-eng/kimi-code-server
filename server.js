@@ -244,7 +244,7 @@ function restoreLatestBackup() {
     const token = pentaractLogin();
 
     // List backup files
-    const listResult = execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/tree?path=/backups/" \
+    const listResult = execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/tree?path=backups" \
       -H "Authorization: Bearer ${token}"`, { timeout: 15000, encoding: 'utf8' });
     const data = JSON.parse(listResult);
 
