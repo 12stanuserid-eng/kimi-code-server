@@ -547,7 +547,19 @@ const server = http.createServer((req, res) => {
         prRes.on('data', c => chunks.push(c));
         prRes.on('end', () => {
           let html = Buffer.concat(chunks).toString('utf-8');
-          const wsScript = '<script>\n(function(){\n  var ws = "kimi-workspace-default";\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    if (o.indexOf(ws) === -1) { o.unshift(ws); localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o)); }\n  } catch(e){}\n})();\n</script>';
+          // Read actual workspace IDs from sessions directory so all sessions appear in UI
+          let wsIds = [];
+          try {
+            const sessionsDir = path.join(os.homedir(), '.kimi-code', 'sessions');
+            if (fs.existsSync(sessionsDir)) {
+              wsIds = fs.readdirSync(sessionsDir, { withFileTypes: true })
+                .filter(d => d.isDirectory() && d.name.startsWith('wd_'))
+                .map(d => d.name);
+            }
+          } catch(e) {}
+          // Also inject a deterministic default so new sessions are visible
+          if (!wsIds.includes('kimi-workspace-default')) wsIds.unshift('kimi-workspace-default');
+          const wsScript = '<script>\n(function(){\n  var ids = ' + JSON.stringify(wsIds) + ';\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    ids.forEach(function(id){ if(o.indexOf(id)===-1) o.push(id); });\n    localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n  } catch(e){}\n})();\n</script>';
           if (html.includes('</body>')) html = html.replace('</body>', wsScript + '\n</body>');
           else if (html.includes('</html>')) html = html.replace('</html>', wsScript + '\n</html>');
           else html += wsScript;
