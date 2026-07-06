@@ -263,8 +263,8 @@ function restoreLatestBackup() {
     execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${latest.path}" \
       -H "Authorization: Bearer ${token}" -o /tmp/restore-kimi.tar.gz`, { timeout: 120000 });
 
-    // Extract to root (tar preserves paths from ~/.kimi-code/)
-    execSync(`tar -xzf /tmp/restore-kimi.tar.gz -C / && rm -f /tmp/restore-kimi.tar.gz`, { timeout: 30000 });
+    // Extract to correct KIMI_HOME parent directory
+    execSync(`tar -xzf /tmp/restore-kimi.tar.gz -C ${path.dirname(KIMI_HOME)} && rm -f /tmp/restore-kimi.tar.gz`, { timeout: 30000 });
 
     log('✅ Restore completed successfully');
     return true;
