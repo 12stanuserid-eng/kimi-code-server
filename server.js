@@ -787,8 +787,18 @@ server.on('upgrade', (req, socket, head) => {
             log(`✅ Kimi daemon accepted WebSocket upgrade: ${firstLine}`);
             daemonAlive = true;
 
-            // Write the HTTP response head back to the client
-            socket.write(responseBuffer);
+            // Split response at header boundary — 101 headers may arrive
+            // in the same TCP packet as the first WebSocket frame(s).
+            const headerPart = responseBuffer.slice(0, headerEnd + 4);
+            const bodyPart = responseBuffer.slice(headerEnd + 4);
+
+            // Write HTTP 101 response head to the browser
+            socket.write(headerPart);
+
+            // Forward any WebSocket frames that arrived with the 101 response
+            if (bodyPart.length > 0) {
+              socket.write(bodyPart);
+            }
           } else {
             // Log full response headers for debugging
             const responseHeaders = headerStr.split('\r\n').slice(1).join(' | ');
@@ -802,14 +812,6 @@ server.on('upgrade', (req, socket, head) => {
             } catch(e) {}
             proxySocket.destroy();
             return;
-          }
-
-          // Forward any remaining data (past the HTTP headers) to the client
-          const bodyStart = headerEnd + 4;
-          if (bodyStart < responseBuffer.length) {
-            // Prepend the 101 response head + remaining data
-            const headOnly = responseBuffer.slice(0, headerEnd + 4);
-            socket.write(headOnly);
           }
 
           // Enable TCP keepalive on both ends to prevent idle disconnects
