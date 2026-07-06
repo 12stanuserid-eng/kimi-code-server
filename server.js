@@ -267,6 +267,35 @@ function restoreLatestBackup() {
     execSync(`tar -xzf /tmp/restore-kimi.tar.gz -C ${path.dirname(KIMI_HOME)} && rm -f /tmp/restore-kimi.tar.gz`, { timeout: 30000 });
 
     log('✅ Restore completed successfully');
+
+    // Patch workspace roots in workspaces.json so Kimi doesn't stat inaccessible /root/ paths
+    try {
+      const wsPath = path.join(KIMI_HOME, 'workspaces.json');
+      if (fs.existsSync(wsPath)) {
+        const wsData = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
+        let patched = false;
+        const renderBase = path.dirname(path.dirname(KIMI_HOME)); // e.g. /opt/render
+        for (const [id, ws] of Object.entries(wsData.workspaces || {})) {
+          const oldRoot = ws.root || '';
+          if (oldRoot === '/root') {
+            ws.root = renderBase;
+            log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
+            patched = true;
+          } else if (oldRoot.startsWith('/root/')) {
+            ws.root = oldRoot.replace('/root', renderBase);
+            log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
+            patched = true;
+          }
+        }
+        if (patched) {
+          fs.writeFileSync(wsPath, JSON.stringify(wsData, null, 2));
+          log('✅ Workspace roots patched for Render environment');
+        }
+      }
+    } catch (e) {
+      log(`⚠️ Workspace patch skipped: ${e.message}`);
+    }
+
     return true;
   } catch (err) {
     log(`❌ Restore failed: ${err.message}`);
