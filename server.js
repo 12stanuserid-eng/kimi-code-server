@@ -744,18 +744,13 @@ server.on('upgrade', (req, socket, head) => {
     const requestLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
     proxySocket.write(requestLine);
 
-    // Forward client headers, but ensure the right auth for Kimi daemon
-    // Kimi daemon expects the token in sec-websocket-protocol header, NOT Authorization
-    let hasSecWebSocketProtocol = false;
+    // Forward client headers to the daemon, then inject auth
     for (const [key, value] of Object.entries(req.headers)) {
       const lower = key.toLowerCase();
       if (lower === 'connection') {
         proxySocket.write(`connection: upgrade\r\n`);
-      } else if (lower === 'sec-websocket-protocol') {
-        hasSecWebSocketProtocol = true;
-        proxySocket.write(`sec-websocket-protocol: ${value}\r\n`);
       } else if (lower === 'authorization') {
-        // Skip — we handle auth via sec-websocket-protocol below
+        // Skip — we inject the daemon's Bearer token below
         continue;
       } else if (lower === 'host' || lower === 'origin') {
         // Forward original host/origin — KIMI_CODE_ALLOWED_HOSTS includes them
@@ -764,10 +759,8 @@ server.on('upgrade', (req, socket, head) => {
         proxySocket.write(`${key}: ${value}\r\n`);
       }
     }
-    // Ensure sec-websocket-protocol is set — Kimi daemon requires it for auth
-    if (!hasSecWebSocketProtocol) {
-      proxySocket.write(`sec-websocket-protocol: ${FIXED_TOKEN}\r\n`);
-    }
+    // Kimi daemon v0.21.0 authenticates WebSocket via Authorization: Bearer
+    proxySocket.write(`authorization: Bearer ${FIXED_TOKEN}\r\n`);
     proxySocket.write('\r\n');
 
     // Forward any remaining upgrade body data (typically empty for WebSocket)
