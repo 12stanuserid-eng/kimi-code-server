@@ -2,14 +2,14 @@
   'use strict';
   if (document.getElementById('ks-root')) return;
 
-  // ====== INLINE SVG ICON (gear — matches Kimi UI style) ======
+  // ====== INLINE SVG ICON (gear) ======
   var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
 
-  // ====== CREATE ROOT ======
+  // ====== CREATE ROOT (fixed-position, outside React's DOM) ======
   var root = document.createElement('div');
   root.id = 'ks-root';
 
-  // Button — positioned in sidebar area, styled to match Kimi
+  // Button — styled as a sidebar row, fixed at bottom-left
   var btn = document.createElement('button');
   btn.id = 'ks-btn';
   btn.title = 'Provider Settings';
@@ -51,14 +51,14 @@
 
   // ====== CLOSE ======
   window.ksC = function() {
-    document.getElementById('ks-modal').classList.remove('ks-open');
+    modal.classList.remove('ks-open');
   };
 
   // ====== OPEN ======
   btn.onclick = function(e) {
     e.stopPropagation();
     ksRef();
-    document.getElementById('ks-modal').classList.add('ks-open');
+    modal.classList.add('ks-open');
   };
 
   // Close on overlay click
@@ -138,13 +138,11 @@
     document.getElementById('ks-url').value = '';
     document.getElementById('ks-key').value = '';
     document.getElementById('ks-st').style.display = 'none';
-    // Fetch current provider data to fill URL
     fetch('/kimi-admin/providers').then(function(r) { return r.json(); }).then(function(d) {
       if (!d.success || !d.providers) return;
       var p = d.providers.find(function(x) { return x.id === id; });
       if (p) {
         document.getElementById('ks-url').value = p.base_url || '';
-        document.getElementById('ks-em').textContent = 'Editing: ' + id;
       }
     }).catch(function() {});
   };
@@ -203,125 +201,6 @@
       })
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
-
-  // ====== PERSISTENT SIDEBAR INJECTION ======
-  // Kimi is a React SPA — it re-renders the sidebar on route navigation,
-  // which removes injected DOM nodes. We keep a permanent MutationObserver
-  // AND a periodic timer to re-inject the button whenever it goes missing.
-
-  function isButtonPlaced() {
-    var b = document.getElementById('ks-btn');
-    return b && b.parentNode && b.parentNode !== root;
-  }
-
-  function injectButton() {
-    var btn = document.getElementById('ks-btn');
-    if (!btn) return false;
-    if (btn.parentNode && btn.parentNode !== root) return true; // already placed
-
-    // --- Strategy 1: Find by heading text ---
-    var headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b, span, label, div');
-    for (var i = 0; i < headings.length; i++) {
-      var h = headings[i];
-      var text = (h.textContent || '').trim();
-      if (text === 'Session settings' || text === 'App preferences' || text === 'Sign out') {
-        if (h.offsetParent !== null) {
-          var parent = h.closest('[class*="content"], [class*="section"], [class*="group"], [class*="body"], [class*="inner"], section, div');
-          if (!parent || parent === document.body || parent === document.documentElement) {
-            parent = h.parentElement;
-          }
-          if (text === 'Sign out') {
-            parent.parentElement.insertBefore(btn, parent);
-          } else {
-            parent.insertBefore(btn, parent.firstChild);
-          }
-          return true;
-        }
-      }
-    }
-
-    // --- Strategy 2: Find container by combined text ---
-    var all = document.querySelectorAll('div, section, aside, nav');
-    for (var i2 = 0; i2 < all.length; i2++) {
-      var el = all[i2];
-      if (el.offsetParent === null || el.children.length === 0) continue;
-      var childrenText = '';
-      for (var j = 0; j < el.children.length; j++) {
-        childrenText += el.children[j].textContent || '';
-      }
-      if (childrenText.indexOf('Session settings') !== -1 && childrenText.indexOf('App preferences') !== -1) {
-        el.insertBefore(btn, el.firstChild);
-        return true;
-      }
-    }
-
-    // --- Strategy 3: Class-based selectors ---
-    var targets = [
-      '[class*="sidebar"]', '[class*="Sidebar"]',
-      '[class*="settings"]', '[class*="Settings"]',
-      '[class*="panel"]', '[class*="Panel"]',
-      '[data-testid*="sidebar"]',
-      'nav', 'aside',
-      '[class*="menu"]', '[class*="Menu"]',
-      '[class*="navigation"]', '[class*="Navigation"]',
-      '[class*="rail"]', '[class*="Rail"]'
-    ];
-    for (var k = 0; k < targets.length; k++) {
-      var t = document.querySelector(targets[k]);
-      if (t && t.offsetParent !== null) {
-        t.appendChild(btn);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  // Try immediately
-  injectButton();
-
-  // === Permanent observer — never disconnects ===
-  // React re-renders the sidebar on every route change, which removes
-  // our injected button. This observer catches those removals and
-  // re-injects the button immediately.
-  var permObs = new MutationObserver(function() {
-    if (!isButtonPlaced()) {
-      injectButton();
-    }
-    // Also check if modal providers list needs refresh
-    if (modal.classList.contains('ks-open') && document.getElementById('ks-l').children.length <= 1) {
-      ksRef();
-    }
-  });
-  permObs.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true
-  });
-
-  // === Periodic safety net (every 2s) ===
-  // Handles edge cases where the MutationObserver might miss a change.
-  setInterval(function() {
-    if (!isButtonPlaced()) {
-      injectButton();
-    }
-  }, 2000);
-
-  // === Floating fallback after 15s ===
-  // If after 15 seconds the button is NOT in the sidebar (injection failed),
-  // show it as a fixed floating button so it's always accessible.
-  setTimeout(function() {
-    if (!isButtonPlaced()) {
-      var fb = document.getElementById('ks-btn');
-      if (fb && fb.parentNode === root) {
-        root.style.position = 'fixed';
-        root.style.bottom = '20px';
-        root.style.left = '12px';
-        root.style.zIndex = '99998';
-        root.style.maxWidth = '200px';
-      }
-    }
-  }, 15000);
 
   // Initial load
   ksRef();

@@ -1,4 +1,4 @@
-/* Provider Settings — Theme-aware, matches Kimi Code UI */
+/* Provider Settings — Fixed-position sidebar-style button + modal */
 /* Uses Kimi's CSS variables + data-color-scheme + prefers-color-scheme */
 
 /* ===== Theme: Dark (Kimi's default) ===== */
@@ -40,7 +40,7 @@
   }
 }
 
-/* ===== Explicit light mode (user selected 'light' in settings) ===== */
+/* ===== Explicit light mode ===== */
 html[data-color-scheme="light"] {
   --ks-bg: #ffffff;
   --ks-surface: #f6f8fa;
@@ -57,7 +57,7 @@ html[data-color-scheme="light"] {
   --ks-overlay: rgba(255, 255, 255, 0.5);
 }
 
-/* ===== Explicit dark mode (user selected 'dark' in settings, overrides system) ===== */
+/* ===== Explicit dark mode ===== */
 html[data-color-scheme="dark"] {
   --ks-bg: #0d1117;
   --ks-surface: #161b22;
@@ -74,14 +74,25 @@ html[data-color-scheme="dark"] {
   --ks-overlay: rgba(13, 17, 23, 0.75);
 }
 
-/* ===== Provider button ===== */
+/* ===== Root container — fixed position, never inside React's DOM ===== */
+#ks-root {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 99998;
+  pointer-events: none;
+}
+#ks-root > * {
+  pointer-events: auto;
+}
+
+/* ===== Provider button — looks like a native sidebar row ===== */
 #ks-btn {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
   padding: 8px 14px;
-  margin: 4px 0;
   border: none;
   border-radius: var(--ks-radius);
   background: transparent;
@@ -92,6 +103,9 @@ html[data-color-scheme="dark"] {
   transition: background 0.15s ease, color 0.15s ease;
   text-align: left;
   box-sizing: border-box;
+  white-space: nowrap;
+  min-width: 160px;
+  backdrop-filter: blur(8px);
 }
 #ks-btn:hover {
   background: var(--ks-surface);
@@ -378,5 +392,14 @@ html[data-color-scheme="dark"] {
     width: calc(100vw - 16px);
     max-height: calc(100vh - 16px);
     border-radius: var(--ks-radius);
+  }
+  #ks-root {
+    bottom: 8px;
+    left: 8px;
+  }
+  #ks-btn {
+    min-width: auto;
+    padding: 6px 10px;
+    font-size: 12px;
   }
 }
