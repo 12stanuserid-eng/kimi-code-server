@@ -2,118 +2,201 @@
   'use strict';
   if (document.getElementById('ks-injected')) return;
 
-  // ====== INLINE SVG ICON (gear) ======
+  var KS_ID = 'ks-injected';
+  var modal = null;
+  var currentProviders = [];
+
+  // ====== SVG ICONS ======
   var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
-
-  var ksId = 'ks-injected';
-
-  // ====== MODAL ELEMENT (shared, attached once) ======
-  var modal = document.createElement('div');
-  modal.id = 'ks-modal';
-  modal.innerHTML =
-    '<div id="ks-box">' +
-      '<div id="ks-hd">' +
-        '<h2>Provider Settings</h2>' +
-        '<button onclick="ksC()" aria-label="Close">✕</button>' +
-      '</div>' +
-      '<div id="ks-bd">' +
-        '<div id="ks-st"></div>' +
-        '<div id="ks-l"></div>' +
-        '<div id="ks-frm">' +
-          '<label>Provider ID</label>' +
-          '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false">' +
-          '<label>Base URL</label>' +
-          '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false">' +
-          '<label>API Key</label>' +
-          '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false">' +
-          '<div class="ks-f">' +
-            '<button class="ks-s ks-p" onclick="ksS()">Save Provider</button>' +
-            '<button class="ks-s ks-g" onclick="ksCf()">Clear</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div id="ks-ft">' +
-        '<button class="ks-s ks-p" onclick="ksR()">Restart Daemon</button>' +
-        '<button class="ks-s ks-g" onclick="ksRef()">Refresh List</button>' +
-      '</div>' +
-    '</div>';
-  document.body.appendChild(modal);
 
   // ====== MARK INJECTED ======
   var mark = document.createElement('meta');
-  mark.id = ksId;
+  mark.id = KS_ID;
   document.head.appendChild(mark);
 
-  // ====== INJECT BUTTON INTO SIDEBAR ======
-  function injectSidebarButton() {
-    var rail = document.querySelector('.sidebar-rail');
-    if (!rail) return false;
+  // ====== BUILD MODAL ======
+  function buildModal() {
+    if (modal && modal.parentNode) return modal;
+    modal = document.createElement('div');
+    modal.id = 'ks-modal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);backdrop-filter:blur(2px);';
+    modal.innerHTML =
+      '<div id="ks-box" style="background:var(--color-surface-raised, #1c2128);border:1px solid var(--color-line, #2d333b);border-radius:var(--radius-xl, 12px);box-shadow:var(--shadow-xl, 0 8px 32px rgba(0,0,0,0.5));width:min(440px,calc(100vw-32px));max-height:min(680px,calc(100vh-64px));display:flex;flex-direction:column;color:var(--color-text,#c9cdd4);font-family:var(--font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);overflow:hidden;animation:ks-fade-in 0.15s ease;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;border-bottom:1px solid var(--color-line,#2d333b);flex-shrink:0;">' +
+          '<h2 style="margin:0;font-size:15px;font-weight:600;color:var(--color-text,#c9cdd4);">Provider Settings</h2>' +
+          '<button onclick="ksC()" aria-label="Close" style="background:none;border:none;color:var(--color-text-faint,#6b7280);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:var(--radius-md,6px);line-height:1;">✕</button>' +
+        '</div>' +
+        '<div style="padding:16px 20px 20px;overflow-y:auto;flex:1;">' +
+          '<div id="ks-st" style="font-size:12px;padding:6px 10px;border-radius:6px;margin-bottom:10px;display:none;line-height:1.4;"></div>' +
+          '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;"></div>' +
+          '<div id="ks-frm">' +
+            '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">Provider ID</label>' +
+            '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
+            '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">Base URL</label>' +
+            '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
+            '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">API Key</label>' +
+            '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
+            '<div style="display:flex;gap:8px;margin-top:4px;">' +
+              '<button class="ks-s ks-p" onclick="ksS()" style="flex:1;padding:8px;font-size:13px;font-weight:600;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;">Save Provider</button>' +
+              '<button class="ks-s ks-g" onclick="ksCf()" style="flex:1;padding:8px;font-size:13px;font-weight:600;text-align:center;background:var(--color-line,#2d333b);color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:6px;cursor:pointer;">Clear</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;padding:12px 20px 16px;border-top:1px solid var(--color-line,#2d333b);">' +
+          '<button class="ks-s ks-p" onclick="ksR()" style="flex:1;padding:7px 12px;font-size:12px;font-weight:500;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;">Restart Daemon</button>' +
+          '<button class="ks-s ks-g" onclick="ksRef()" style="flex:1;padding:7px 12px;font-size:12px;font-weight:500;text-align:center;background:var(--color-line,#2d333b);color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:6px;cursor:pointer;">Refresh List</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
 
-    // Check if already injected in THIS rail instance
-    if (rail.querySelector('.ks-sidebar-btn')) return true;
-
-    // Divider
-    var div = document.createElement('div');
-    div.className = 'ks-sidebar-divider';
-
-    // Button
-    var btn = document.createElement('button');
-    btn.className = 'ks-sidebar-btn';
-    btn.title = 'Provider Settings';
-    btn.innerHTML = cogSvg + '<span>Provider Settings</span>';
-
-    // Click handler
-    btn.onclick = function(e) {
-      e.stopPropagation();
-      ksRef();
-      modal.classList.add('ks-open');
+    // Close on overlay click
+    modal.onclick = function(e) {
+      if (e.target === this) ksC();
     };
 
-    rail.appendChild(div);
-    rail.appendChild(btn);
+    // Close on Escape
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && modal.style.display === 'flex') ksC();
+    });
+
+    return modal;
+  }
+
+  // ====== INJECT ROW INTO SETTINGS PANEL ======
+  function injectSettingsRow() {
+    // Remove any existing injected row first
+    var existing = document.getElementById('ks-srow');
+    if (existing) existing.remove();
+
+    // Find "Sign out" element - look for it by text content
+    var allNodes = document.querySelectorAll('button, a, div, span');
+    var signOutEl = null;
+    for (var i = 0; i < allNodes.length; i++) {
+      var el = allNodes[i];
+      if (el.children.length === 0 && el.textContent.trim() === 'Sign out') {
+        // Found the sign out text node - get its parent that's a row
+        var parent = el.closest('button, a, [role="menuitem"], .srow, [class*="srow"]');
+        if (parent) {
+          signOutEl = parent;
+          break;
+        }
+        // If no parent row, use element itself
+        signOutEl = el;
+        break;
+      }
+    }
+
+    if (!signOutEl) return false;
+
+    // Create provider settings row matching Kimi's row style
+    var row = document.createElement('div');
+    row.id = 'ks-srow';
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;cursor:pointer;border-top:1px solid var(--color-line,#2d333b);transition:background 0.15s;';
+
+    var left = document.createElement('div');
+    left.style.cssText = 'flex:1;min-width:0;';
+    left.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--color-text,#c9cdd4);">Provider Settings</div>' +
+      '<div style="font-size:11px;color:var(--color-text-muted,#9aa0a8);margin-top:1px;">Manage custom LLM providers</div>';
+
+    var right = document.createElement('div');
+    right.style.cssText = 'display:flex;align-items:center;gap:4px;color:var(--color-text-faint,#6b7280);font-size:13px;';
+    right.innerHTML = cogSvg;
+
+    row.appendChild(left);
+    row.appendChild(right);
+
+    row.onclick = function(e) {
+      e.stopPropagation();
+      e.preventDefault();
+      ksRef();
+      buildModal();
+      modal.style.display = 'flex';
+    };
+
+    row.onmouseenter = function() { this.style.background = 'var(--color-surface,#161b22)'; };
+    row.onmouseleave = function() { this.style.background = 'transparent'; };
+
+    // Insert before Sign out
+    signOutEl.parentNode.insertBefore(row, signOutEl);
     return true;
   }
 
-  // Try immediately
-  if (!injectSidebarButton()) {
-    // Wait for sidebar to exist (SolidJS mounts asynchronously)
+  // ====== TRY INJECTION WITH MUTATION OBSERVER ======
+  function tryInject() {
+    if (injectSettingsRow()) return true;
+
+    // Wait for settings panel to render
     var obs = new MutationObserver(function() {
-      if (injectSidebarButton()) {
+      if (injectSettingsRow()) {
         obs.disconnect();
       }
     });
     obs.observe(document.body, { childList: true, subtree: true });
+
+    // Also retry periodically for 30s
+    var retries = 0;
+    var maxRetries = 30;
+    var iv = setInterval(function() {
+      retries++;
+      if (injectSettingsRow() || retries >= maxRetries) {
+        clearInterval(iv);
+      }
+    }, 1000);
+
+    return false;
   }
+
+  // Try immediately and on DOM changes
+  tryInject();
+
+  // Also re-inject when settings panel might have been re-rendered
+  var persistentObs = new MutationObserver(function() {
+    if (!document.getElementById('ks-srow')) {
+      injectSettingsRow();
+    }
+  });
+  persistentObs.observe(document.body, { childList: true, subtree: true });
 
   // ====== CLOSE ======
   window.ksC = function() {
-    modal.classList.remove('ks-open');
+    if (modal) modal.style.display = 'none';
   };
-
-  // Close on overlay click
-  modal.onclick = function(e) {
-    if (e.target === this) ksC();
-  };
-
-  // Close on Escape
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && modal.classList.contains('ks-open')) ksC();
-  });
 
   // ====== CLEAR FORM ======
   window.ksCf = function() {
     document.getElementById('ks-id').value = '';
     document.getElementById('ks-url').value = '';
     document.getElementById('ks-key').value = '';
-    document.getElementById('ks-st').style.display = 'none';
+    var st = document.getElementById('ks-st');
+    if (st) st.style.display = 'none';
   };
 
   // ====== STATUS ======
   window.ksSt = function(msg, type) {
     var el = document.getElementById('ks-st');
+    if (!el) return;
     el.textContent = msg;
     el.className = type || 'ks-ok';
     el.style.display = 'block';
+    if (type === 'ks-ok') {
+      el.style.background = 'rgba(63,185,80,0.1)';
+      el.style.color = 'var(--color-success,#3fb950)';
+      el.style.border = '1px solid rgba(63,185,80,0.25)';
+    } else if (type === 'ks-bad') {
+      el.style.background = 'rgba(248,81,73,0.1)';
+      el.style.color = 'var(--color-danger,#f85149)';
+      el.style.border = '1px solid rgba(248,81,73,0.25)';
+    } else if (type === 'ks-wait') {
+      el.style.background = 'transparent';
+      el.style.color = 'var(--color-text-muted,#9aa0a8)';
+      el.style.border = 'none';
+      el.style.textAlign = 'center';
+      el.style.padding = '20px';
+    } else {
+      el.style.background = 'rgba(63,185,80,0.1)';
+      el.style.color = 'var(--color-success,#3fb950)';
+      el.style.border = '1px solid rgba(63,185,80,0.25)';
+    }
     if (type !== 'ks-wait') {
       setTimeout(function() { el.style.display = 'none'; }, 5000);
     }
@@ -122,36 +205,38 @@
   // ====== REFRESH LIST ======
   window.ksRef = function() {
     var l = document.getElementById('ks-l');
-    l.innerHTML = '<div class="ks-wait">Loading providers...</div>';
+    if (!l) return;
+    l.innerHTML = '<div style="color:var(--color-text-muted,#9aa0a8);text-align:center;padding:20px;font-size:13px;">Loading providers...</div>';
     fetch('/kimi-admin/providers').then(function(r) { return r.json(); }).then(function(d) {
       if (!d.success || !d.providers) {
-        l.innerHTML = '<div class="ks-bad" style="padding:12px;text-align:center;border-radius:6px">Failed to load providers</div>';
+        l.innerHTML = '<div style="background:rgba(248,81,73,0.1);color:var(--color-danger,#f85149);padding:12px;text-align:center;border-radius:6px;border:1px solid rgba(248,81,73,0.25);font-size:13px;">Failed to load providers</div>';
         return;
       }
+      currentProviders = d.providers;
       if (d.providers.length === 0) {
-        l.innerHTML = '<div style="color:var(--ks-faint);padding:12px;text-align:center;font-size:13px">No providers configured.</div>';
+        l.innerHTML = '<div style="color:var(--color-text-faint,#6b7280);padding:12px;text-align:center;font-size:13px;">No providers configured. Add one below.</div>';
         return;
       }
       l.innerHTML = d.providers.map(function(p) {
         var canDel = (p.id !== 'opencode-zen' && p.id !== 'omniroute');
-        var delBtn = canDel ? '<button class="ks-s ks-d" onclick="ksD(\'' + p.id.replace(/'/g, "\\'") + '\')">Del</button>' : '';
+        var delBtn = canDel ? '<button onclick="ksD(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:4px 8px;border:none;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;background:var(--color-danger,#f85149);color:#fff;font-family:inherit;">Del</button>' : '';
         var keyStatus = p.has_api_key
           ? '✅ ' + (p.api_key_masked || 'Key set')
           : '⚠️ No key';
-        return '<div class="ks-r">' +
-          '<div class="ks-i">' +
-            '<div class="ks-n">' + escHtml(p.id) + '</div>' +
-            '<div class="ks-dt">' + escHtml(p.base_url) + '</div>' +
-            '<div class="ks-k">' + keyStatus + '</div>' +
+        return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--color-line,#2d333b);border-radius:8px;background:var(--color-surface,#161b22);">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13px;font-weight:600;color:var(--color-text,#c9cdd4);">' + escHtml(p.id) + '</div>' +
+            '<div style="font-size:11px;color:var(--color-text-faint,#6b7280);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(p.base_url) + '</div>' +
+            '<div style="font-size:11px;color:var(--color-text-muted,#9aa0a8);margin-top:1px;">' + keyStatus + '</div>' +
           '</div>' +
-          '<div class="ks-a">' +
-            '<button class="ks-s ks-p" onclick="ksE(\'' + p.id.replace(/'/g, "\\'") + '\')">Edit</button>' +
+          '<div style="display:flex;gap:4px;flex-shrink:0;">' +
+            '<button onclick="ksE(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:4px 8px;border:none;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;background:var(--color-accent,#58a6ff);color:#fff;font-family:inherit;">Edit</button>' +
             delBtn +
           '</div>' +
         '</div>';
       }).join('');
     }).catch(function(e) {
-      l.innerHTML = '<div class="ks-bad" style="padding:12px;text-align:center;border-radius:6px">' + escHtml(e.message) + '</div>';
+      l.innerHTML = '<div style="background:rgba(248,81,73,0.1);color:var(--color-danger,#f85149);padding:12px;text-align:center;border-radius:6px;border:1px solid rgba(248,81,73,0.25);font-size:13px;">' + escHtml(e.message) + '</div>';
     });
   };
 
@@ -166,14 +251,15 @@
     document.getElementById('ks-id').value = id;
     document.getElementById('ks-url').value = '';
     document.getElementById('ks-key').value = '';
-    document.getElementById('ks-st').style.display = 'none';
-    fetch('/kimi-admin/providers').then(function(r) { return r.json(); }).then(function(d) {
-      if (!d.success || !d.providers) return;
-      var p = d.providers.find(function(x) { return x.id === id; });
-      if (p) {
-        document.getElementById('ks-url').value = p.base_url || '';
+    var st = document.getElementById('ks-st');
+    if (st) st.style.display = 'none';
+    // Find URL from current providers
+    for (var i = 0; i < currentProviders.length; i++) {
+      if (currentProviders[i].id === id) {
+        document.getElementById('ks-url').value = currentProviders[i].base_url || '';
+        break;
       }
-    }).catch(function() {});
+    }
   };
 
   // ====== SAVE ======
@@ -230,6 +316,18 @@
       })
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
+
+  // ====== ADD FOCUS STYLE FOR INPUTS ======
+  document.addEventListener('focusin', function(e) {
+    if (e.target.matches('#ks-frm input, #ks-frm input')) {
+      e.target.style.borderColor = 'var(--color-accent,#58a6ff)';
+    }
+  });
+  document.addEventListener('focusout', function(e) {
+    if (e.target.matches('#ks-frm input, #ks-frm input')) {
+      e.target.style.borderColor = 'var(--color-line,#2d333b)';
+    }
+  });
 
   // Initial load
   ksRef();
