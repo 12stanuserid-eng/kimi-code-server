@@ -2,8 +2,8 @@
   'use strict';
   if (document.getElementById('ks-root')) return;
 
-  // ====== INLINE SVG ICON (sliders — matches Kimi UI style) ======
-  var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>';
+  // ====== INLINE SVG ICON (gear — matches Kimi UI style) ======
+  var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
 
   // ====== CREATE ROOT ======
   var root = document.createElement('div');
@@ -204,49 +204,127 @@
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
 
-  // ====== TRY TO INJECT INTO KIMI SIDEBAR ======
-  // If Kimi's sidebar has a settings container, add our button there instead
-  var sidebarInjected = false;
+  // ====== INJECT BUTTON INTO KIMI SIDEBAR ======
+  // Strategy: find a container by text content (most reliable across versions),
+  // fall back to class-based selectors, then to periodic retry.
 
-  function tryInjectSidebar() {
-    if (sidebarInjected) return;
-    // Look for the settings/sidebar container in Kimi's app
-    // Try various selectors that Kimi might use
-    var targets = [
-      document.querySelector('[class*="sidebar"]'),
-      document.querySelector('[class*="Sidebar"]'),
-      document.querySelector('[class*="settings"]'),
-      document.querySelector('[class*="Settings"]'),
-      document.querySelector('[class*="panel"]'),
-      document.querySelector('[class*="Panel"]'),
-      document.querySelector('[data-testid*="sidebar"]'),
-      document.querySelector('nav'),
-      document.querySelector('aside'),
-      document.querySelector('[class*="menu"]'),
-      document.querySelector('[class*="Menu"]'),
-    ];
+  var injected = false;
 
-    for (var i = 0; i < targets.length; i++) {
-      var t = targets[i];
-      if (t && t.offsetParent !== null) { // visible
-        // Found a sidebar-like container, move our button into it
-        var existingBtn = document.getElementById('ks-btn');
-        if (existingBtn && existingBtn.parentNode === root) {
-          // Add before the first child or at end
-          t.appendChild(existingBtn);
-          sidebarInjected = true;
-          return;
+  function injectButton() {
+    if (injected) return true;
+    var btn = document.getElementById('ks-btn');
+    if (!btn) return false;
+    // Already moved out of ks-root?
+    if (btn.parentNode && btn.parentNode !== root) {
+      injected = true;
+      return true;
+    }
+
+    // --- Strategy 1: Find by heading text ---
+    var headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b, span, label, div');
+    for (var i = 0; i < headings.length; i++) {
+      var h = headings[i];
+      var text = (h.textContent || '').trim();
+      if (text === 'Session settings' || text === 'App preferences' || text === 'Sign out') {
+        if (h.offsetParent !== null) {
+          // Find the nearest scrollable container to insert into
+          var parent = h.closest('[class*="content"], [class*="section"], [class*="group"], [class*="body"], [class*="inner"], section, div');
+          if (!parent || parent === document.body || parent === document.documentElement) {
+            parent = h.parentElement;
+          }
+          // Insert button at the start of this section, or right before the heading
+          // If text is "Sign out", insert before it
+          if (text === 'Sign out') {
+            parent.parentElement.insertBefore(btn, parent);
+          } else {
+            parent.insertBefore(btn, parent.firstChild);
+          }
+          injected = true;
+          return true;
         }
       }
     }
+
+    // --- Strategy 2: Find by text within elements ---
+    var all = document.querySelectorAll('div, section, aside, nav');
+    for (var i2 = 0; i2 < all.length; i2++) {
+      var el = all[i2];
+      if (el.offsetParent === null || el.children.length === 0) continue;
+      // Check if this element contains "Session settings" as a direct child text
+      var childrenText = '';
+      for (var j = 0; j < el.children.length; j++) {
+        childrenText += el.children[j].textContent || '';
+      }
+      if (childrenText.indexOf('Session settings') !== -1 && childrenText.indexOf('App preferences') !== -1) {
+        // This is likely the settings sidebar container
+        el.insertBefore(btn, el.firstChild);
+        injected = true;
+        return true;
+      }
+    }
+
+    // --- Strategy 3: Class-based selectors ---
+    var targets = [
+      '[class*="sidebar"]', '[class*="Sidebar"]',
+      '[class*="settings"]', '[class*="Settings"]',
+      '[class*="panel"]', '[class*="Panel"]',
+      '[data-testid*="sidebar"]',
+      'nav', 'aside',
+      '[class*="menu"]', '[class*="Menu"]',
+      // Kimi v0.22.x sidebar containers
+      '[class*="navigation"]', '[class*="Navigation"]',
+      '[class*="rail"]', '[class*="Rail"]'
+    ];
+    for (var k = 0; k < targets.length; k++) {
+      var t = document.querySelector(targets[k]);
+      if (t && t.offsetParent !== null) {
+        t.appendChild(btn);
+        injected = true;
+        return true;
+      }
+    }
+
+    return false;
   }
 
-  // Try immediately and on DOM changes
-  tryInjectSidebar();
-  var obs = new MutationObserver(function() {
-    tryInjectSidebar();
-  });
-  obs.observe(document.body, { childList: true, subtree: true });
+  // Try immediately
+  if (!injectButton()) {
+    // Watch for DOM changes — includes attribute changes (class/style toggles)
+    var obs = new MutationObserver(function() {
+      if (injectButton()) obs.disconnect();
+    });
+    obs.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden']
+    });
+
+    // Periodic retry as fallback (React might update asynchronously)
+    var retryTimer = setInterval(function() {
+      if (injectButton()) {
+        clearInterval(retryTimer);
+        obs.disconnect();
+      }
+    }, 300);
+
+    // Stop retrying after 15s if still not injected — show floating button as fallback
+    setTimeout(function() {
+      clearInterval(retryTimer);
+      obs.disconnect();
+      if (!injected) {
+        // Fallback: style the button as a fixed floating element
+        var fb = document.getElementById('ks-btn');
+        if (fb && fb.parentNode === root) {
+          root.style.position = 'fixed';
+          root.style.bottom = '20px';
+          root.style.left = '12px';
+          root.style.zIndex = '99998';
+          root.style.maxWidth = '200px';
+        }
+      }
+    }, 15000);
+  }
 
   // Refresh list if modal is opened later
   var openCheck = new MutationObserver(function() {
