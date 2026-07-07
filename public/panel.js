@@ -68,25 +68,23 @@
     var existing = document.getElementById('ks-srow');
     if (existing) existing.remove();
 
-    // Find "Sign out" element - look for it by text content
-    var allNodes = document.querySelectorAll('button, a, div, span');
+    // Find "Sign out" element — look for it by text content (robust)
+    var allNodes = document.querySelectorAll('button, a, div, span, label, [class*="acct"], [class*="sign"], [class*="out"]');
     var signOutEl = null;
     for (var i = 0; i < allNodes.length; i++) {
       var el = allNodes[i];
-      if (el.children.length === 0 && el.textContent.trim() === 'Sign out') {
-        // Found the sign out text node - get its parent that's a row
-        var parent = el.closest('button, a, [role="menuitem"], .srow, [class*="srow"]');
-        if (parent) {
-          signOutEl = parent;
-          break;
-        }
-        // If no parent row, use element itself
+      var txt = (el.textContent || '').trim();
+      if (txt === 'Sign out' || txt === 'Sign Out') {
         signOutEl = el;
         break;
       }
     }
 
     if (!signOutEl) return false;
+
+    // If we found a leaf text element, climb up to a reasonable parent row
+    var parent = signOutEl.closest('button, a, [role="menuitem"], [class*="acct"], [class*="srow"]');
+    if (parent && parent !== signOutEl) signOutEl = parent;
 
     // Create provider settings row matching Kimi's row style
     var row = document.createElement('div');
@@ -121,41 +119,44 @@
     return true;
   }
 
-  // ====== TRY INJECTION WITH MUTATION OBSERVER ======
+  // ====== TRY INJECTION — immediate + observer + retry ======
   function tryInject() {
     if (injectSettingsRow()) return true;
 
-    // Wait for settings panel to render
-    var obs = new MutationObserver(function() {
-      if (injectSettingsRow()) {
-        obs.disconnect();
-      }
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
+    // MutationObserver — catches SolidJS re-renders
+    if (!window._ksObs) {
+      window._ksObs = new MutationObserver(function() {
+        if (!document.getElementById('ks-srow')) {
+          injectSettingsRow();
+        }
+      });
+      window._ksObs.observe(document.body, { childList: true, subtree: true });
+    }
 
-    // Also retry periodically for 30s
+    // Also retry periodically for 10s
     var retries = 0;
-    var maxRetries = 30;
+    var maxRetries = 10;
     var iv = setInterval(function() {
       retries++;
       if (injectSettingsRow() || retries >= maxRetries) {
         clearInterval(iv);
       }
-    }, 1000);
+    }, 500);
 
     return false;
   }
 
-  // Try immediately and on DOM changes
+  // Try immediately on page load
   tryInject();
 
-  // Also re-inject when settings panel might have been re-rendered
-  var persistentObs = new MutationObserver(function() {
-    if (!document.getElementById('ks-srow')) {
-      injectSettingsRow();
-    }
-  });
-  persistentObs.observe(document.body, { childList: true, subtree: true });
+  // Also try whenever user clicks anywhere (catches settings panel opening)
+  document.addEventListener('click', function() {
+    setTimeout(function() {
+      if (!document.getElementById('ks-srow')) {
+        injectSettingsRow();
+      }
+    }, 200);
+  }, true);
 
   // ====== CLOSE ======
   window.ksC = function() {
