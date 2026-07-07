@@ -127,6 +127,7 @@ function startKimi() {
   const kimiEnv = {
     ...process.env,
     HOME: process.env.HOME || '/root',
+    KIMI_CODE_HOME: KIMI_HOME,
     KIMI_CODE_PASSWORD: FIXED_TOKEN,
     KIMI_CODE_ALLOWED_HOSTS: allowedHosts,
   };
@@ -761,34 +762,8 @@ const server = http.createServer((req, res) => {
           });
           // Inject workspace IDs into localStorage so sessions appear in UI
           const wsScript = '<script>\n(function(){\n  var ids = ' + JSON.stringify(wsIds) + ';\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    ids.forEach(function(id){ if(o.indexOf(id)===-1) o.push(id); });\n    localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n  } catch(e){}\n})();\n</script>';
-          // Inject WebSocket redirect — tunnel URL supports WS natively, bypassing Cloudflare
-          const wsRedirect = tunnelUrl ? `<script>
-(function(){
-  var tunnelOrigin = ${JSON.stringify(tunnelUrl)};
-  var wsTunnelOrigin = tunnelOrigin.replace(/^http:/,'ws:').replace(/^https:/,'wss:');
-  var OrigWS = window.WebSocket;
-  window.WebSocket = function(url, protocols) {
-    var newUrl = url;
-    if (typeof url === 'string' && !url.includes('trycloudflare')) {
-      if (url.indexOf('/') === 0) {
-        newUrl = wsTunnelOrigin + url;
-      } else {
-        var u = url.replace(/^ws:/,'http:').replace(/^wss:/,'https:');
-        if (u.indexOf(window.location.origin) === 0) {
-          newUrl = url.replace(window.location.origin, tunnelOrigin)
-                       .replace(/^http:/,'ws:').replace(/^https:/,'wss:');
-        }
-      }
-    }
-    return new OrigWS(newUrl, protocols);
-  };
-  window.WebSocket.prototype = OrigWS.prototype;
-  window.WebSocket.CONNECTING = 0;
-  window.WebSocket.OPEN = 1;
-  window.WebSocket.CLOSING = 2;
-  window.WebSocket.CLOSED = 3;
-})();
-</script>` : '';
+          // WebSocket redirect disabled — custom domain works directly with WS proxy below
+          const wsRedirect = '';
           const settingsPanelScript = `<script>
 (function(){
 if(document.getElementById("ks-btn"))return;
