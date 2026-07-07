@@ -204,21 +204,20 @@
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
 
-  // ====== INJECT BUTTON INTO KIMI SIDEBAR ======
-  // Strategy: find a container by text content (most reliable across versions),
-  // fall back to class-based selectors, then to periodic retry.
+  // ====== PERSISTENT SIDEBAR INJECTION ======
+  // Kimi is a React SPA — it re-renders the sidebar on route navigation,
+  // which removes injected DOM nodes. We keep a permanent MutationObserver
+  // AND a periodic timer to re-inject the button whenever it goes missing.
 
-  var injected = false;
+  function isButtonPlaced() {
+    var b = document.getElementById('ks-btn');
+    return b && b.parentNode && b.parentNode !== root;
+  }
 
   function injectButton() {
-    if (injected) return true;
     var btn = document.getElementById('ks-btn');
     if (!btn) return false;
-    // Already moved out of ks-root?
-    if (btn.parentNode && btn.parentNode !== root) {
-      injected = true;
-      return true;
-    }
+    if (btn.parentNode && btn.parentNode !== root) return true; // already placed
 
     // --- Strategy 1: Find by heading text ---
     var headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b, span, label, div');
@@ -227,38 +226,31 @@
       var text = (h.textContent || '').trim();
       if (text === 'Session settings' || text === 'App preferences' || text === 'Sign out') {
         if (h.offsetParent !== null) {
-          // Find the nearest scrollable container to insert into
           var parent = h.closest('[class*="content"], [class*="section"], [class*="group"], [class*="body"], [class*="inner"], section, div');
           if (!parent || parent === document.body || parent === document.documentElement) {
             parent = h.parentElement;
           }
-          // Insert button at the start of this section, or right before the heading
-          // If text is "Sign out", insert before it
           if (text === 'Sign out') {
             parent.parentElement.insertBefore(btn, parent);
           } else {
             parent.insertBefore(btn, parent.firstChild);
           }
-          injected = true;
           return true;
         }
       }
     }
 
-    // --- Strategy 2: Find by text within elements ---
+    // --- Strategy 2: Find container by combined text ---
     var all = document.querySelectorAll('div, section, aside, nav');
     for (var i2 = 0; i2 < all.length; i2++) {
       var el = all[i2];
       if (el.offsetParent === null || el.children.length === 0) continue;
-      // Check if this element contains "Session settings" as a direct child text
       var childrenText = '';
       for (var j = 0; j < el.children.length; j++) {
         childrenText += el.children[j].textContent || '';
       }
       if (childrenText.indexOf('Session settings') !== -1 && childrenText.indexOf('App preferences') !== -1) {
-        // This is likely the settings sidebar container
         el.insertBefore(btn, el.firstChild);
-        injected = true;
         return true;
       }
     }
@@ -271,7 +263,6 @@
       '[data-testid*="sidebar"]',
       'nav', 'aside',
       '[class*="menu"]', '[class*="Menu"]',
-      // Kimi v0.22.x sidebar containers
       '[class*="navigation"]', '[class*="Navigation"]',
       '[class*="rail"]', '[class*="Rail"]'
     ];
@@ -279,7 +270,6 @@
       var t = document.querySelector(targets[k]);
       if (t && t.offsetParent !== null) {
         t.appendChild(btn);
-        injected = true;
         return true;
       }
     }
@@ -288,51 +278,50 @@
   }
 
   // Try immediately
-  if (!injectButton()) {
-    // Watch for DOM changes — includes attribute changes (class/style toggles)
-    var obs = new MutationObserver(function() {
-      if (injectButton()) obs.disconnect();
-    });
-    obs.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'style', 'hidden']
-    });
+  injectButton();
 
-    // Periodic retry as fallback (React might update asynchronously)
-    var retryTimer = setInterval(function() {
-      if (injectButton()) {
-        clearInterval(retryTimer);
-        obs.disconnect();
-      }
-    }, 300);
-
-    // Stop retrying after 15s if still not injected — show floating button as fallback
-    setTimeout(function() {
-      clearInterval(retryTimer);
-      obs.disconnect();
-      if (!injected) {
-        // Fallback: style the button as a fixed floating element
-        var fb = document.getElementById('ks-btn');
-        if (fb && fb.parentNode === root) {
-          root.style.position = 'fixed';
-          root.style.bottom = '20px';
-          root.style.left = '12px';
-          root.style.zIndex = '99998';
-          root.style.maxWidth = '200px';
-        }
-      }
-    }, 15000);
-  }
-
-  // Refresh list if modal is opened later
-  var openCheck = new MutationObserver(function() {
-    if (modal.classList.contains('ks-open') && document.getElementById('ks-l').children.length === 0) {
+  // === Permanent observer — never disconnects ===
+  // React re-renders the sidebar on every route change, which removes
+  // our injected button. This observer catches those removals and
+  // re-injects the button immediately.
+  var permObs = new MutationObserver(function() {
+    if (!isButtonPlaced()) {
+      injectButton();
+    }
+    // Also check if modal providers list needs refresh
+    if (modal.classList.contains('ks-open') && document.getElementById('ks-l').children.length <= 1) {
       ksRef();
     }
   });
-  openCheck.observe(modal, { attributes: true, attributeFilter: ['class'] });
+  permObs.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true
+  });
+
+  // === Periodic safety net (every 2s) ===
+  // Handles edge cases where the MutationObserver might miss a change.
+  setInterval(function() {
+    if (!isButtonPlaced()) {
+      injectButton();
+    }
+  }, 2000);
+
+  // === Floating fallback after 15s ===
+  // If after 15 seconds the button is NOT in the sidebar (injection failed),
+  // show it as a fixed floating button so it's always accessible.
+  setTimeout(function() {
+    if (!isButtonPlaced()) {
+      var fb = document.getElementById('ks-btn');
+      if (fb && fb.parentNode === root) {
+        root.style.position = 'fixed';
+        root.style.bottom = '20px';
+        root.style.left = '12px';
+        root.style.zIndex = '99998';
+        root.style.maxWidth = '200px';
+      }
+    }
+  }, 15000);
 
   // Initial load
   ksRef();
