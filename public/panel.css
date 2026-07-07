@@ -1,4 +1,4 @@
-/* Provider Settings — Fixed-position sidebar-style button + modal */
+/* Provider Settings — Modal + Sidebar-injected button */
 /* Uses Kimi's CSS variables + data-color-scheme + prefers-color-scheme */
 
 /* ===== Theme: Dark (Kimi's default) ===== */
@@ -74,27 +74,24 @@ html[data-color-scheme="dark"] {
   --ks-overlay: rgba(13, 17, 23, 0.75);
 }
 
-/* ===== Root container — fixed position, never inside React's DOM ===== */
-#ks-root {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  z-index: 99998;
-  pointer-events: none;
-}
-#ks-root > * {
-  pointer-events: auto;
+/* ===== Sidebar button — injected at bottom of .sidebar-rail ===== */
+
+/* Divider above the button */
+.ks-sidebar-divider {
+  height: 1px;
+  background: var(--ks-line);
+  margin: 6px 10px;
+  flex-shrink: 0;
 }
 
-/* ===== Provider button — looks like a native sidebar row ===== */
-#ks-btn {
+/* Button styled exactly like Kimi's native .menu-item */
+.ks-sidebar-btn {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 6px 14px;
   border: none;
-  border-radius: var(--ks-radius);
   background: transparent;
   color: var(--ks-muted);
   font-family: var(--ks-font);
@@ -103,23 +100,22 @@ html[data-color-scheme="dark"] {
   transition: background 0.15s ease, color 0.15s ease;
   text-align: left;
   box-sizing: border-box;
-  white-space: nowrap;
-  min-width: 160px;
-  backdrop-filter: blur(8px);
+  flex-shrink: 0;
 }
-#ks-btn:hover {
+.ks-sidebar-btn:hover {
   background: var(--ks-surface);
   color: var(--ks-text);
 }
-#ks-btn:active {
+.ks-sidebar-btn:active {
   background: var(--ks-line);
 }
-#ks-btn svg {
+.ks-sidebar-btn svg {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
+  opacity: 0.7;
 }
-#ks-btn span {
+.ks-sidebar-btn span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -392,14 +388,5 @@ html[data-color-scheme="dark"] {
     width: calc(100vw - 16px);
     max-height: calc(100vh - 16px);
     border-radius: var(--ks-radius);
-  }
-  #ks-root {
-    bottom: 8px;
-    left: 8px;
-  }
-  #ks-btn {
-    min-width: auto;
-    padding: 6px 10px;
-    font-size: 12px;
   }
 }

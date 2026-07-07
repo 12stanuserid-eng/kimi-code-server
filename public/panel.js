@@ -1,22 +1,13 @@
 (function() {
   'use strict';
-  if (document.getElementById('ks-root')) return;
+  if (document.getElementById('ks-injected')) return;
 
   // ====== INLINE SVG ICON (gear) ======
-  var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
+  var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
 
-  // ====== CREATE ROOT (fixed-position, outside React's DOM) ======
-  var root = document.createElement('div');
-  root.id = 'ks-root';
+  var ksId = 'ks-injected';
 
-  // Button — styled as a sidebar row, fixed at bottom-left
-  var btn = document.createElement('button');
-  btn.id = 'ks-btn';
-  btn.title = 'Provider Settings';
-  btn.innerHTML = cogSvg + '<span>Provider Settings</span>';
-  root.appendChild(btn);
-
-  // Modal
+  // ====== MODAL ELEMENT (shared, attached once) ======
   var modal = document.createElement('div');
   modal.id = 'ks-modal';
   modal.innerHTML =
@@ -46,19 +37,57 @@
         '<button class="ks-s ks-g" onclick="ksRef()">Refresh List</button>' +
       '</div>' +
     '</div>';
-  root.appendChild(modal);
-  document.body.appendChild(root);
+  document.body.appendChild(modal);
+
+  // ====== MARK INJECTED ======
+  var mark = document.createElement('meta');
+  mark.id = ksId;
+  document.head.appendChild(mark);
+
+  // ====== INJECT BUTTON INTO SIDEBAR ======
+  function injectSidebarButton() {
+    var rail = document.querySelector('.sidebar-rail');
+    if (!rail) return false;
+
+    // Check if already injected in THIS rail instance
+    if (rail.querySelector('.ks-sidebar-btn')) return true;
+
+    // Divider
+    var div = document.createElement('div');
+    div.className = 'ks-sidebar-divider';
+
+    // Button
+    var btn = document.createElement('button');
+    btn.className = 'ks-sidebar-btn';
+    btn.title = 'Provider Settings';
+    btn.innerHTML = cogSvg + '<span>Provider Settings</span>';
+
+    // Click handler
+    btn.onclick = function(e) {
+      e.stopPropagation();
+      ksRef();
+      modal.classList.add('ks-open');
+    };
+
+    rail.appendChild(div);
+    rail.appendChild(btn);
+    return true;
+  }
+
+  // Try immediately
+  if (!injectSidebarButton()) {
+    // Wait for sidebar to exist (SolidJS mounts asynchronously)
+    var obs = new MutationObserver(function() {
+      if (injectSidebarButton()) {
+        obs.disconnect();
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
 
   // ====== CLOSE ======
   window.ksC = function() {
     modal.classList.remove('ks-open');
-  };
-
-  // ====== OPEN ======
-  btn.onclick = function(e) {
-    e.stopPropagation();
-    ksRef();
-    modal.classList.add('ks-open');
   };
 
   // Close on overlay click
