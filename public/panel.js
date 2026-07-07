@@ -26,7 +26,7 @@
           '<h2 style="margin:0;font-size:15px;font-weight:600;color:var(--color-text,#c9cdd4);">Provider Settings</h2>' +
           '<button onclick="ksC()" aria-label="Close" style="background:none;border:none;color:var(--color-text-faint,#6b7280);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:var(--radius-md,6px);line-height:1;">✕</button>' +
         '</div>' +
-        '<div style="padding:16px 20px 20px;overflow-y:auto;flex:1;">' +
+        '<div style="padding:16px 20px 20px;overflow-y:auto;flex:1;min-height:0;">' +
           '<div id="ks-st" style="font-size:12px;padding:6px 10px;border-radius:6px;margin-bottom:10px;display:none;line-height:1.4;"></div>' +
           '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;"></div>' +
           '<div id="ks-frm">' +
@@ -89,15 +89,14 @@
     // Create provider settings row matching Kimi's row style
     var row = document.createElement('div');
     row.id = 'ks-srow';
-    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;cursor:pointer;border-top:1px solid var(--color-line,#2d333b);transition:background 0.15s;';
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;cursor:pointer;transition:background 0.15s;';
 
     var left = document.createElement('div');
-    left.style.cssText = 'flex:1;min-width:0;';
-    left.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--color-text,#c9cdd4);">Provider Settings</div>' +
-      '<div style="font-size:11px;color:var(--color-text-muted,#9aa0a8);margin-top:1px;">Manage custom LLM providers</div>';
+    left.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;';
+    left.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--color-text,#c9cdd4);">Provider Settings</div>';
 
     var right = document.createElement('div');
-    right.style.cssText = 'display:flex;align-items:center;gap:4px;color:var(--color-text-faint,#6b7280);font-size:13px;';
+    right.style.cssText = 'display:flex;align-items:center;color:var(--color-text-faint,#6b7280);font-size:13px;';
     right.innerHTML = cogSvg;
 
     row.appendChild(left);
@@ -106,12 +105,12 @@
     row.onclick = function(e) {
       e.stopPropagation();
       e.preventDefault();
-      ksRef();
       buildModal();
       modal.style.display = 'flex';
+      ksRef();
     };
 
-    row.onmouseenter = function() { this.style.background = 'var(--color-surface,#161b22)'; };
+    row.onmouseenter = function() { this.style.background = 'var(--color-surface-hover,rgba(255,255,255,0.06))'; };
     row.onmouseleave = function() { this.style.background = 'transparent'; };
 
     // Insert before Sign out
@@ -150,13 +149,28 @@
   tryInject();
 
   // Also try whenever user clicks anywhere (catches settings panel opening)
-  document.addEventListener('click', function() {
+  document.addEventListener('click', function(e) {
+    // Skip if click is inside our modal
+    if (modal && modal.style.display === 'flex' && modal.contains(e.target)) return;
     setTimeout(function() {
       if (!document.getElementById('ks-srow')) {
         injectSettingsRow();
       }
-    }, 200);
+    }, 800);
   }, true);
+
+  // Periodic injection check for 30s after page load (handles SPA re-renders)
+  (function periodicInject() {
+    var checks = 0;
+    var maxChecks = 15;
+    var iv2 = setInterval(function() {
+      checks++;
+      if (!document.getElementById('ks-srow')) {
+        injectSettingsRow();
+      }
+      if (checks >= maxChecks) clearInterval(iv2);
+    }, 2000);
+  })();
 
   // ====== CLOSE ======
   window.ksC = function() {
@@ -307,13 +321,17 @@
 
   // ====== RESTART DAEMON ======
   window.ksR = function() {
-    if (!confirm('Restart daemon? Active chats will briefly disconnect.')) return;
-    ksSt('Restarting daemon...', 'ks-wait');
+    if (!confirm('Restart daemon to pick up new models? Active chats will briefly disconnect.')) return;
+    ksSt('Restarting daemon... Page will reload automatically.', 'ks-wait');
     fetch('/kimi-admin/restart-daemon', { method: 'POST' })
       .then(function(r) { return r.json(); })
       .then(function(d) {
-        if (d.success) { ksSt('Restart initiated! Reconnecting...', 'ks-ok'); setTimeout(ksRef, 5000); }
-        else { ksSt(d.message || 'Daemon not running', 'ks-bad'); }
+        if (d.success) {
+          ksSt('Restart initiated! Reloading page in 6s...', 'ks-ok');
+          setTimeout(function() { location.reload(); }, 6000);
+        } else {
+          ksSt(d.message || 'Daemon not running', 'ks-bad');
+        }
       })
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
