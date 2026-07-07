@@ -21,28 +21,28 @@
     modal.id = 'ks-modal';
     modal.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);backdrop-filter:blur(2px);';
     modal.innerHTML =
-      '<div id="ks-box" style="background:var(--color-surface-raised, #1c2128);border:1px solid var(--color-line, #2d333b);border-radius:var(--radius-xl, 12px);box-shadow:var(--shadow-xl, 0 8px 32px rgba(0,0,0,0.5));width:min(440px,calc(100vw-32px));max-height:min(680px,calc(100vh-64px));display:flex;flex-direction:column;color:var(--color-text,#c9cdd4);font-family:var(--font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);overflow:hidden;animation:ks-fade-in 0.15s ease;">' +
+      '<div id="ks-box" style="background:var(--color-surface-raised, #1c2128);border:1px solid var(--color-line, #2d333b);border-radius:var(--radius-xl, 12px);box-shadow:var(--shadow-xl, 0 8px 32px rgba(0,0,0,0.5));width:min(440px,calc(100vw-32px));max-height:min(580px,calc(100vh-80px));display:flex;flex-direction:column;color:var(--color-text,#c9cdd4);font-family:var(--font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);overflow:hidden;animation:ks-fade-in 0.15s ease;">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;border-bottom:1px solid var(--color-line,#2d333b);flex-shrink:0;">' +
           '<h2 style="margin:0;font-size:15px;font-weight:600;color:var(--color-text,#c9cdd4);">Provider Settings</h2>' +
           '<button onclick="ksC()" aria-label="Close" style="background:none;border:none;color:var(--color-text-faint,#6b7280);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:var(--radius-md,6px);line-height:1;">✕</button>' +
         '</div>' +
-        '<div style="padding:16px 20px 20px;overflow-y:auto;flex:1;min-height:0;">' +
+        '<div style="padding:12px 16px 16px;overflow-y:auto;flex:1;min-height:0;">' +
           '<div id="ks-st" style="font-size:12px;padding:6px 10px;border-radius:6px;margin-bottom:10px;display:none;line-height:1.4;"></div>' +
-          '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;overflow-y:auto;max-height:280px;flex-shrink:0;"></div>' +
+          '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;overflow-y:auto;max-height:200px;flex-shrink:0;"></div>' +
           '<div id="ks-frm" style="flex-shrink:0;">' +
             '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">Provider ID</label>' +
-            '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
+            '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false" style="width:100%;padding:7px 10px;margin-bottom:8px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
             '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">Base URL</label>' +
-            '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
+            '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false" style="width:100%;padding:7px 10px;margin-bottom:8px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
             '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">API Key</label>' +
-            '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
+            '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false" style="width:100%;padding:7px 10px;margin-bottom:8px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
             '<div style="display:flex;gap:8px;margin-top:4px;">' +
-              '<button class="ks-s ks-p" onclick="ksS()" style="flex:1;padding:8px;font-size:13px;font-weight:600;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;">Save Provider</button>' +
-              '<button class="ks-s ks-g" onclick="ksCf()" style="flex:1;padding:8px;font-size:13px;font-weight:600;text-align:center;background:var(--color-line,#2d333b);color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:6px;cursor:pointer;">Clear</button>' +
+              '<button class="ks-s ks-p" onclick="ksS()" style="flex:1;padding:7px;font-size:12px;font-weight:600;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;">Save Provider</button>' +
+              '<button class="ks-s ks-g" onclick="ksCf()" style="flex:1;padding:7px;font-size:12px;font-weight:600;text-align:center;background:var(--color-line,#2d333b);color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:6px;cursor:pointer;">Clear</button>' +
             '</div>' +
           '</div>' +
         '</div>' +
-        '<div style="display:flex;gap:6px;padding:12px 20px 16px;border-top:1px solid var(--color-line,#2d333b);">' +
+        '<div style="display:flex;gap:6px;padding:10px 16px 12px;border-top:1px solid var(--color-line,#2d333b);">' +
           '<button class="ks-s ks-p" onclick="ksR()" style="flex:1;padding:7px 12px;font-size:12px;font-weight:500;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;">Restart Daemon</button>' +
           '<button class="ks-s ks-g" onclick="ksRef()" style="flex:1;padding:7px 12px;font-size:12px;font-weight:500;text-align:center;background:var(--color-line,#2d333b);color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:6px;cursor:pointer;">Refresh List</button>' +
         '</div>' +
