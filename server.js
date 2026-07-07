@@ -737,6 +737,7 @@ const server = http.createServer((req, res) => {
     const pr = http.request(opts, (prRes) => {
       const headers = { ...prRes.headers };
       delete headers['transfer-encoding'];
+      delete headers['content-security-policy'];
 
       // Inject workspace ID into HTML responses so sessions persist across browser sessions
       const ct = (prRes.headers['content-type'] || '').toLowerCase();
