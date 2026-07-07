@@ -158,14 +158,18 @@
     if (!id) { ksSt('Provider ID is required', 'ks-bad'); return; }
     if (!url) { ksSt('Base URL is required', 'ks-bad'); return; }
     var body = JSON.stringify({ id: id, type: 'openai', base_url: url, api_key: key });
-    ksSt('Saving...', 'ks-wait');
+    ksSt('Connecting to provider and discovering models...', 'ks-wait');
     fetch('/kimi-admin/providers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body
     }).then(function(r) { return r.json(); }).then(function(d) {
       if (d.success) {
-        ksSt('Saved! Restart daemon to apply changes.', 'ks-ok');
+        var msg = d.message || 'Saved! Restart daemon to apply.';
+        if (d.models_discovered > 0) {
+          msg = d.models_discovered + ' models discovered for "' + id + '". Restart daemon to use them.';
+        }
+        ksSt(msg, 'ks-ok');
         ksRef();
         ksCf();
       } else {

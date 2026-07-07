@@ -512,6 +512,77 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ====== MODEL AUTO-DISCOVERY ======
+
+function fetchModels(baseUrl, apiKey) {
+  return new Promise((resolve, reject) => {
+    const url = baseUrl.replace(/\/+$/, '') + '/models';
+    const httpx = url.startsWith('https') ? https : http;
+    log(`🔍 Fetching models from ${url}`);
+    const options = { headers: {} };
+    if (apiKey) {
+      options.headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    httpx.get(url, options, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          reject(new Error('Invalid API key or unauthorized'));
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
+          return;
+        }
+        try {
+          const json = JSON.parse(data);
+          // Handle various API response shapes:
+          // OpenAI: { data: [{ id: "..." }] }
+          // NVIDIA: { data: [{ id: "..." }] }
+          // Some: { models: [...] }
+          // Plain array: [...]
+          let models = [];
+          if (Array.isArray(json.data)) {
+            models = json.data.map(m => m.id).filter(Boolean);
+          } else if (Array.isArray(json.models)) {
+            models = json.models.map(m => m.id || m.model || m).filter(Boolean);
+          } else if (Array.isArray(json)) {
+            models = json.map(m => m.id || m.model || m).filter(Boolean);
+          }
+          resolve(models);
+        } catch(e) {
+          reject(new Error('Failed to parse models response: ' + e.message));
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+function writeModelsForProvider(configPath, providerId, models) {
+  let raw;
+  try { raw = fs.readFileSync(configPath, 'utf8'); } catch (e) { raw = ''; }
+
+  // Remove existing models that reference this provider
+  const modelRegex = new RegExp(`\\n?\\[models\\.\\"?${escapeRegex(providerId)}-[^\\]]*\\"?\\]\\n(?:[^\\[]*\\n)*`, 'g');
+  raw = raw.replace(modelRegex, '');
+
+  // Also remove model aliases that reference this provider
+  const modelRefRegex = new RegExp(`\\n?\\[models\\.\\"?[^\\]]*\\"?\\]\\n\\s*provider\\s*=\\s*"${escapeRegex(providerId)}"\\n(?:[^\\[]*\\n)*`, 'g');
+  raw = raw.replace(modelRefRegex, '');
+
+  // Add new models
+  let modelBlock = '';
+  models.forEach(m => {
+    const safeName = m.replace(/[^a-zA-Z0-9_-]/g, '_');
+    modelBlock += `\n[models."${providerId}-${safeName}"]\nprovider = "${providerId}"\nmodel = "${m}"\nmax_context_size = 128000\n`;
+  });
+
+  raw += modelBlock;
+  fs.writeFileSync(configPath, raw, 'utf8');
+  log(`✅ ${models.length} models written for provider "${providerId}"`);
+}
+
 function restartKimiDaemon() {
   if (kimiProc && !kimiProc.killed) {
     log('🔄 Restarting Kimi daemon (SIGTERM)...');
@@ -677,25 +748,58 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({ success: true, providers: list }));
   }
 
-  // POST /kimi-admin/providers — add or update a provider
+  // POST /kimi-admin/providers — add or update a provider with model auto-discovery
   if (req.url === '/kimi-admin/providers' && req.method === 'POST') {
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
-      try {
-        const data = JSON.parse(body);
-        if (!data.id || !data.base_url) {
+      (async () => {
+        try {
+          const data = JSON.parse(body);
+          if (!data.id || !data.base_url) {
+            res.writeHead(400, {'Content-Type': 'application/json'});
+            return res.end(JSON.stringify({ success: false, error: 'id and base_url are required' }));
+          }
+
+          // Step 1: Fetch models from provider to validate API key and discover models
+          let models = [];
+          let fetchError = null;
+          try {
+            models = await fetchModels(data.base_url, data.api_key || '');
+          } catch (e) {
+            fetchError = e.message;
+            // Even if model fetch fails, still save the provider (user can manually configure)
+          }
+
+          // Step 2: Write provider to config
+          writeProviderToConfig(data.id, data.type || 'openai', data.api_key || '', data.base_url);
+
+          // Step 3: If models were discovered, write them
+          if (models.length > 0) {
+            writeModelsForProvider(getConfigPath(), data.id, models);
+          }
+
+          log(`🔧 Admin API: ${data.id} provider ${readProvidersFromConfig()[data.id] ? 'updated' : 'added'}`);
+
+          // Step 4: Return response
+          const response = {
+            success: true,
+            models_discovered: models.length,
+            message: models.length > 0
+              ? `Provider "${data.id}" saved with ${models.length} models. Restart daemon to apply.`
+              : `Provider "${data.id}" saved. Restart daemon to apply.`
+          };
+          if (fetchError) {
+            response.model_fetch_error = fetchError;
+            response.message = `Provider "${data.id}" saved, but model discovery failed: ${fetchError}`;
+          }
+          res.writeHead(200, {'Content-Type': 'application/json'});
+          res.end(JSON.stringify(response));
+        } catch (e) {
           res.writeHead(400, {'Content-Type': 'application/json'});
-          return res.end(JSON.stringify({ success: false, error: 'id and base_url are required' }));
+          res.end(JSON.stringify({ success: false, error: e.message }));
         }
-        writeProviderToConfig(data.id, data.type || 'openai', data.api_key || '', data.base_url);
-        log(`🔧 Admin API: ${data.id} provider ${readProvidersFromConfig()[data.id] ? 'updated' : 'added'}`);
-        res.writeHead(200, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify({ success: true, message: `Provider "${data.id}" saved. Restart daemon to apply.` }));
-      } catch (e) {
-        res.writeHead(400, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify({ success: false, error: e.message }));
-      }
+      })();
     });
     return;
   }
