@@ -26,7 +26,7 @@ function loadExistingKeys() {
     for (const line of lines) {
       const provMatch = line.match(/^\[providers\.(.+?)\]$/);
       if (provMatch) currentProvider = provMatch[1].replace(/"/g, '');
-      const keyMatch = line.match(/^apiKey\s*=\s*"(.+)"$/);
+      const keyMatch = line.match(/^(?:apiKey|api_key)\s*=\s*"(.+)"$/);
       if (keyMatch && currentProvider) keys[currentProvider] = keyMatch[1];
     }
     console.log(`[setup] Found ${Object.keys(keys).length} existing provider keys in config.toml`);
@@ -67,47 +67,47 @@ server_password = "VNE1wpc7gqGD1THY-Np6WRPYdU5LlOrk3ICvxsy_N58"
 
 [providers.opencode]
 type = "openai"
-apiKey = "${getKey('OPENCODE_API_KEY', 'opencode', 'sk-4yUcUjpt9DuWw7WbHzXtHkMzdLW6QxQPoBZ6mvmI89ljuCSMe0Ac9UtVekDMynfz')}"
+api_key = "${getKey('OPENCODE_API_KEY', 'opencode', 'sk-4yUcUjpt9DuWw7WbHzXtHkMzdLW6QxQPoBZ6mvmI89ljuCSMe0Ac9UtVekDMynfz')}"
 base_url = "https://opencode.ai/zen/v1"
 
 # ─── BLUESMINDS ──────────────────────────────────────────────
 
 [providers.bluesminds]
 type = "openai"
-apiKey = "${getKey('BLUESMINDS_API_KEY', 'bluesminds', 'sk-YOUR_BLUESMINDS_KEY')}"
+api_key = "${getKey('BLUESMINDS_API_KEY', 'bluesminds', 'sk-YOUR_BLUESMINDS_KEY')}"
 base_url = "https://api.bluesminds.com/v1"
 
 [providers."bluesminds-backup"]
 type = "openai"
-apiKey = "${getKey('BLUESMINDS_BACKUP_API_KEY', 'bluesminds-backup', 'sk-YOUR_BLUESMINDS_BACKUP_KEY')}"
+api_key = "${getKey('BLUESMINDS_BACKUP_API_KEY', 'bluesminds-backup', 'sk-YOUR_BLUESMINDS_BACKUP_KEY')}"
 base_url = "https://api.bluesminds.com/v1"
 
 # ─── OMNIROUTE (local proxy, 59 models) ──────────────────────
 
 [providers.omniroute]
 type = "openai"
-apiKey = "no-auth-required"
+api_key = "no-auth-required"
 base_url = "http://127.0.0.1:20128/v1"
 
 # ─── Z-AI (GLM / Zhipu) ──────────────────────────────────────
 
 [providers."z-ai"]
 type = "openai"
-apiKey = "${getKey('ZAI_API_KEY', 'z-ai', 'YOUR_ZHIPU_KEY')}"
+api_key = "${getKey('ZAI_API_KEY', 'z-ai', 'YOUR_ZHIPU_KEY')}"
 base_url = "https://open.bigmodel.cn/api/paas/v4/"
 
 # ─── ZENMUX ─────────────────────────────────────────────────
 
 [providers.zenmux]
 type = "openai"
-apiKey = "${getKey('ZENMUX_API_KEY', 'zenmux', 'sk-mg-v1-YOUR_ZENMUX_KEY')}"
+api_key = "${getKey('ZENMUX_API_KEY', 'zenmux', 'sk-mg-v1-YOUR_ZENMUX_KEY')}"
 base_url = "https://zenmux.ai/api/v1"
 
 # ─── CLOUDFLARE (free, Workers AI via OpenAI-compat endpoint) ─────
 
 [providers.cloudflare]
 type = "openai"
-apiKey = "${getKey('CLOUDFLARE_API_KEY', 'cloudflare', 'YOUR_CLOUDFLARE_API_KEY')}"
+api_key = "${getKey('CLOUDFLARE_API_KEY', 'cloudflare', 'YOUR_CLOUDFLARE_API_KEY')}"
 base_url = "https://api.cloudflare.com/client/v4/accounts/5f649ab31f3eea8092b74d83a9706895/ai/v1"
 
 # ═══════════════════════════════════════════════════════════════
