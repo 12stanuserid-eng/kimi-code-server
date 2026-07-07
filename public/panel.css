@@ -1,22 +1,50 @@
-/* Provider Settings — Matches Kimi Code UI design language */
+/* Provider Settings — Theme-aware, matches Kimi Code UI */
+/* Uses Kimi's CSS variables + data-color-scheme detection to adapt to both themes */
+
+/* ===== Theme: Dark (Kimi's default) ===== */
 :root {
   --ks-bg: #0d1117;
   --ks-surface: #161b22;
   --ks-raised: #1c2128;
-  --ks-text: #c9cdd4;
-  --ks-muted: #9aa0a8;
-  --ks-faint: #6b7280;
-  --ks-accent: #58a6ff;
+  --ks-text: var(--color-text, #c9cdd4);
+  --ks-muted: var(--color-text-muted, #9aa0a8);
+  --ks-faint: var(--color-text-faint, #6b7280);
+  --ks-accent: var(--color-accent, #58a6ff);
   --ks-line: #2d333b;
   --ks-line-strong: #3d444d;
-  --ks-danger: #f85149;
-  --ks-success: #3fb950;
+  --ks-danger: var(--color-danger, #f85149);
+  --ks-success: var(--color-success, #3fb950);
   --ks-radius: 8px;
   --ks-radius-lg: 12px;
   --ks-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
-/* Provider button — lives inside sidebar, styled like Kimi UI */
+/* ===== Theme: Light ===== */
+html[data-color-scheme="light"] {
+  --ks-bg: #ffffff;
+  --ks-surface: #f6f8fa;
+  --ks-raised: #ffffff;
+  --ks-text: var(--color-text, #1f2328);
+  --ks-muted: var(--color-text-muted, #656d76);
+  --ks-faint: var(--color-text-faint, #8b949e);
+  --ks-accent: var(--color-accent, #0969da);
+  --ks-line: #d0d7de;
+  --ks-line-strong: #d8dee4;
+  --ks-danger: var(--color-danger, #cf222e);
+  --ks-success: var(--color-success, #116329);
+}
+
+/* ===== Shared vars ===== */
+:root {
+  --ks-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  --ks-overlay: rgba(13, 17, 23, 0.75);
+}
+html[data-color-scheme="light"] {
+  --ks-shadow: 0 8px 32px rgba(0,0,0,0.15);
+  --ks-overlay: rgba(255, 255, 255, 0.5);
+}
+
+/* ===== Provider button — lives inside sidebar, styled like Kimi UI ===== */
 #ks-btn {
   display: flex;
   align-items: center;
@@ -55,7 +83,7 @@
   white-space: nowrap;
 }
 
-/* Modal overlay — matches Kimi dialog overlay */
+/* ===== Modal overlay ===== */
 #ks-modal {
   position: fixed;
   inset: 0;
@@ -63,7 +91,7 @@
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(13, 17, 23, 0.75);
+  background: var(--ks-overlay);
   backdrop-filter: blur(2px);
   animation: ks-fade-in 0.15s ease;
 }
@@ -75,12 +103,12 @@
   to { opacity: 1; }
 }
 
-/* Modal box — matches Kimi dialog (ui-dialog) */
+/* ===== Modal box ===== */
 #ks-box {
   background: var(--ks-raised);
   border: 1px solid var(--ks-line);
   border-radius: var(--ks-radius-lg);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: var(--ks-shadow);
   width: min(440px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 64px));
   display: flex;
@@ -95,7 +123,7 @@
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* Modal header */
+/* ===== Modal header ===== */
 #ks-hd {
   display: flex;
   align-items: center;
@@ -125,14 +153,14 @@
   color: var(--ks-text);
 }
 
-/* Scrollable body */
+/* ===== Scrollable body ===== */
 #ks-bd {
   padding: 16px 20px 20px;
   overflow-y: auto;
   flex: 1;
 }
 
-/* Provider list */
+/* ===== Provider list ===== */
 #ks-l {
   display: flex;
   flex-direction: column;
@@ -143,7 +171,7 @@
   display: none;
 }
 
-/* Provider row */
+/* ===== Provider row ===== */
 .ks-r {
   display: flex;
   align-items: center;
@@ -182,7 +210,7 @@
   flex-shrink: 0;
 }
 
-/* Buttons within rows */
+/* ===== Buttons within rows ===== */
 .ks-s {
   padding: 4px 8px;
   border: none;
@@ -213,7 +241,7 @@
   background: var(--ks-line-strong);
 }
 
-/* Status messages */
+/* ===== Status messages ===== */
 #ks-st {
   font-size: 12px;
   padding: 6px 10px;
@@ -239,7 +267,7 @@
   font-size: 13px;
 }
 
-/* Form labels and inputs */
+/* ===== Form labels and inputs ===== */
 #ks-frm label {
   display: block;
   margin: 0 0 3px;
@@ -270,7 +298,7 @@
   color: var(--ks-faint);
 }
 
-/* Form action buttons */
+/* ===== Form action buttons ===== */
 .ks-f {
   display: flex;
   gap: 8px;
@@ -284,7 +312,7 @@
   text-align: center;
 }
 
-/* Secondary actions row */
+/* ===== Secondary actions row ===== */
 #ks-ft {
   display: flex;
   gap: 6px;
@@ -299,7 +327,7 @@
   text-align: center;
 }
 
-/* Scrollbar styling */
+/* ===== Scrollbar styling ===== */
 #ks-bd::-webkit-scrollbar,
 #ks-box::-webkit-scrollbar {
   width: 6px;
@@ -314,7 +342,7 @@
   border-radius: 3px;
 }
 
-/* Responsive adjustments */
+/* ===== Responsive adjustments ===== */
 @media (max-width: 480px) {
   #ks-box {
     width: calc(100vw - 16px);

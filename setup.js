@@ -110,6 +110,14 @@ type = "openai"
 api_key = "${getKey('CLOUDFLARE_API_KEY', 'cloudflare', 'YOUR_CLOUDFLARE_API_KEY')}"
 base_url = "https://api.cloudflare.com/client/v4/accounts/5f649ab31f3eea8092b74d83a9706895/ai/v1"
 
+
+# ─── NVIDIA (free tier, Nemotron, Llama, Mistral, etc.) ───────
+
+[providers.nvidia]
+type = "openai"
+api_key = "${getKey('NVIDIA_API_KEY', 'nvidia', 'nvapi-YOUR_NVIDIA_KEY')}"
+base_url = "https://integrate.api.nvidia.com/v1"
+
 # ═══════════════════════════════════════════════════════════════
 # MODELS
 # ═══════════════════════════════════════════════════════════════

@@ -519,11 +519,19 @@ function fetchModels(baseUrl, apiKey) {
     const url = baseUrl.replace(/\/+$/, '') + '/models';
     const httpx = url.startsWith('https') ? https : http;
     log(`🔍 Fetching models from ${url}`);
-    const options = { headers: {} };
+
+    // Timeout — fail fast after 15s
+    const TIMEOUT_MS = 15000;
+
+    const options = {
+      headers: {},
+      timeout: TIMEOUT_MS
+    };
     if (apiKey) {
       options.headers['Authorization'] = `Bearer ${apiKey}`;
     }
-    httpx.get(url, options, (res) => {
+
+    const req = httpx.get(url, options, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
@@ -542,6 +550,7 @@ function fetchModels(baseUrl, apiKey) {
           // NVIDIA: { data: [{ id: "..." }] }
           // Some: { models: [...] }
           // Plain array: [...]
+          // Also handles { object: "list", data: [...] }
           let models = [];
           if (Array.isArray(json.data)) {
             models = json.data.map(m => m.id).filter(Boolean);
@@ -549,14 +558,60 @@ function fetchModels(baseUrl, apiKey) {
             models = json.models.map(m => m.id || m.model || m).filter(Boolean);
           } else if (Array.isArray(json)) {
             models = json.map(m => m.id || m.model || m).filter(Boolean);
+          } else if (json.data && typeof json.data === 'object' && json.data.length === undefined) {
+            // Some providers return { data: { models: [...] } }
+            if (Array.isArray(json.data.models)) {
+              models = json.data.models.map(m => m.id || m.model || m).filter(Boolean);
+            }
           }
           resolve(models);
         } catch(e) {
           reject(new Error('Failed to parse models response: ' + e.message));
         }
       });
-    }).on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timed out after ' + (TIMEOUT_MS / 1000) + 's'));
+    });
   });
+}
+
+/**
+ * Guess a reasonable context window size from model name patterns.
+ * Falls back to a safe default when no pattern matches.
+ */
+function guessContextSize(modelName) {
+  const lower = modelName.toLowerCase();
+  // Explicit token amounts in name
+  if (/1m\b|1mega|1million|1000000/.test(lower)) return 1000000;
+  if (/1048576/.test(lower)) return 1048576;
+  if (/200k\b|200000/.test(lower)) return 200000;
+  if (/128k\b|128000/.test(lower)) return 128000;
+  if (/100k\b|100000/.test(lower)) return 100000;
+  if (/64k\b|65536/.test(lower)) return 65536;
+  if (/32k\b|32768/.test(lower)) return 32768;
+  if (/16k\b|16384/.test(lower)) return 16384;
+  if (/8k\b|8192/.test(lower)) return 8192;
+  if (/4k\b|4096/.test(lower)) return 4096;
+  // Known model families
+  if (/\bllama-?3\.(?:1|2|3)\b/.test(lower)) return 128000;  // Llama 3.1/3.2/3.3: 128K
+  if (/\bllama-?3\b/.test(lower)) return 8192;              // Llama 3: 8K
+  if (/\bllama-?2\b/.test(lower)) return 4096;              // Llama 2: 4K
+  if (/\bdeepseek\b/.test(lower)) return 128000;             // DeepSeek: 128K
+  if (/\bqwen\b/.test(lower)) return 131072;                 // Qwen 2.5: 128K
+  if (/\bmistral\b/.test(lower)) return 32768;               // Mistral: 32K
+  if (/\bgemma\b/.test(lower)) return 8192;                  // Gemma: 8K
+  if (/\bglm\b/.test(lower)) return 128000;                  // GLM: 128K
+  if (/\bnemotron\b/.test(lower)) return 128000;             // Nemotron: 128K
+  if (/\bgpt-4\b/.test(lower)) return 128000;                // GPT-4: 128K
+  if (/\bgpt-3\.5\b/.test(lower)) return 16384;              // GPT-3.5: 16K
+  if (/\bclaude\b/.test(lower)) return 200000;               // Claude: 200K
+  if (/\bgemini\b/.test(lower)) return 1048576;              // Gemini: 1M
+  // Default safe value for unknown models
+  return 65536;
 }
 
 function writeModelsForProvider(configPath, providerId, models) {
@@ -571,11 +626,12 @@ function writeModelsForProvider(configPath, providerId, models) {
   const modelRefRegex = new RegExp(`\\n?\\[models\\.\\"?[^\\]]*\\"?\\]\\n\\s*provider\\s*=\\s*"${escapeRegex(providerId)}"\\n(?:[^\\[]*\\n)*`, 'g');
   raw = raw.replace(modelRefRegex, '');
 
-  // Add new models
+  // Add new models — use smart context size detection
   let modelBlock = '';
   models.forEach(m => {
     const safeName = m.replace(/[^a-zA-Z0-9_-]/g, '_');
-    modelBlock += `\n[models."${providerId}-${safeName}"]\nprovider = "${providerId}"\nmodel = "${m}"\nmax_context_size = 128000\n`;
+    const ctxSize = guessContextSize(m);
+    modelBlock += `\n[models."${providerId}-${safeName}"]\nprovider = "${providerId}"\nmodel = "${m}"\nmax_context_size = ${ctxSize}\n`;
   });
 
   raw += modelBlock;
