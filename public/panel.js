@@ -1,154 +1,258 @@
 (function() {
-  if (document.getElementById('ks-btn')) return;
+  'use strict';
+  if (document.getElementById('ks-root')) return;
 
-  var css = document.createElement('link');
-  css.rel = 'stylesheet';
-  css.href = '/kimi-admin/panel.css';
-  document.head.appendChild(css);
+  // ====== INLINE SVG ICON (cog) ======
+  var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
+  var plugSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 119.899 4l3.171 3.172a3 3 0 004.243 0l.707-.707a1 1 0 011.414 1.414l-.707.707a3 3 0 010 4.243l-3.172 3.171A7 7 0 119.899 20"/><path d="M4.293 19.707a1 1 0 001.414 0l4.243-4.243"/></svg>';
 
-  var d = document.createElement('div');
-  d.id = 'ks-root';
-  d.innerHTML =
-    '<button id="ks-btn" title="Provider Settings">&#x2699;&#xFE0F;</button>' +
-    '<div id="ks-modal">' +
-      '<div id="ks-box">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
-          '<h2 style="margin:0;color:#6c5ce7">Provider Settings</h2>' +
-          '<button onclick="ksC()" style="background:none;border:none;color:#888;font-size:22px;cursor:pointer">&#x2716;</button>' +
-        '</div>' +
+  // ====== CREATE ROOT ======
+  var root = document.createElement('div');
+  root.id = 'ks-root';
+
+  // Button — positioned in sidebar area, styled to match Kimi
+  var btn = document.createElement('button');
+  btn.id = 'ks-btn';
+  btn.title = 'Provider Settings';
+  btn.innerHTML = cogSvg + '<span>Provider Settings</span>';
+  root.appendChild(btn);
+
+  // Modal
+  var modal = document.createElement('div');
+  modal.id = 'ks-modal';
+  modal.innerHTML =
+    '<div id="ks-box">' +
+      '<div id="ks-hd">' +
+        '<h2>Provider Settings</h2>' +
+        '<button onclick="ksC()" aria-label="Close">✕</button>' +
+      '</div>' +
+      '<div id="ks-bd">' +
         '<div id="ks-st"></div>' +
-        '<div id="ks-l"><div class="ks-wait">Loading...</div></div>' +
-        '<hr style="border-color:#333;margin:16px 0">' +
-        '<div style="text-align:right;font-size:12px;color:#555" id="ks-em"></div>' +
-        '<label>Provider ID</label>' +
-        '<input id="ks-id" placeholder="e.g. my-provider">' +
-        '<label>Base URL</label>' +
-        '<input id="ks-url" placeholder="https://api.example.com/v1">' +
-        '<label>API Key</label>' +
-        '<input id="ks-key" type="password" placeholder="sk-...">' +
-        '<label>Type</label>' +
-        '<select id="ks-typ" onchange="ksTp()">' +
-          '<option value="openai">OpenAI Compatible</option>' +
-          '<option value="anthropic">Anthropic</option>' +
-          '<option value="google">Gemini</option>' +
-          '<option value="custom">Custom</option>' +
-        '</select>' +
-        '<input id="ks-ctyp" placeholder="e.g. ollama, vllm, together" style="display:none;margin-top:-4px">' +
-        '<div class="ks-f">' +
-          '<button class="ks-p" style="flex:2" onclick="ksS()">Save</button>' +
-          '<button class="ks-g" onclick="ksCf()" style="flex:1">Clear</button>' +
-        '</div>' +
-        '<hr style="border-color:#333;margin:16px 0">' +
-        '<div class="ks-f">' +
-          '<button class="ks-p" onclick="ksR()">Restart Daemon</button>' +
-          '<button class="ks-g" onclick="ksRef()">Refresh</button>' +
-          '<button class="ks-g" onclick="ksC()">Close</button>' +
+        '<div id="ks-l"></div>' +
+        '<div id="ks-frm">' +
+          '<label>Provider ID</label>' +
+          '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false">' +
+          '<label>Base URL</label>' +
+          '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false">' +
+          '<label>API Key</label>' +
+          '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false">' +
+          '<div class="ks-f">' +
+            '<button class="ks-s ks-p" onclick="ksS()">Save Provider</button>' +
+            '<button class="ks-s ks-g" onclick="ksCf()">Clear</button>' +
+          '</div>' +
         '</div>' +
       '</div>' +
+      '<div id="ks-ft">' +
+        '<button class="ks-s ks-p" onclick="ksR()">Restart Daemon</button>' +
+        '<button class="ks-s ks-g" onclick="ksRef()">Refresh List</button>' +
+      '</div>' +
     '</div>';
-  document.body.appendChild(d);
+  root.appendChild(modal);
+  document.body.appendChild(root);
 
-  window.ksC = function() { document.getElementById('ks-modal').style.display = 'none'; };
-
-  document.getElementById('ks-btn').onclick = function() {
-    ksRef();
-    document.getElementById('ks-modal').style.display = 'flex';
+  // ====== CLOSE ======
+  window.ksC = function() {
+    document.getElementById('ks-modal').classList.remove('ks-open');
   };
 
-  document.getElementById('ks-modal').onclick = function(e) {
+  // ====== OPEN ======
+  btn.onclick = function(e) {
+    e.stopPropagation();
+    ksRef();
+    document.getElementById('ks-modal').classList.add('ks-open');
+  };
+
+  // Close on overlay click
+  modal.onclick = function(e) {
     if (e.target === this) ksC();
   };
 
+  // Close on Escape
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && modal.classList.contains('ks-open')) ksC();
+  });
+
+  // ====== CLEAR FORM ======
   window.ksCf = function() {
     document.getElementById('ks-id').value = '';
     document.getElementById('ks-url').value = '';
     document.getElementById('ks-key').value = '';
-    document.getElementById('ks-typ').value = 'openai';
-    document.getElementById('ks-em').textContent = '';
-    var ct = document.getElementById('ks-ctyp');
-    if (ct) { ct.style.display = 'none'; ct.value = ''; }
+    document.getElementById('ks-st').style.display = 'none';
   };
 
-  window.ksTp = function() {
-    var t = document.getElementById('ks-typ').value;
-    var ct = document.getElementById('ks-ctyp');
-    if (t === 'custom') { ct.style.display = 'block'; ct.focus(); }
-    else { ct.style.display = 'none'; ct.value = ''; }
+  // ====== STATUS ======
+  window.ksSt = function(msg, type) {
+    var el = document.getElementById('ks-st');
+    el.textContent = msg;
+    el.className = type || 'ks-ok';
+    el.style.display = 'block';
+    if (type !== 'ks-wait') {
+      setTimeout(function() { el.style.display = 'none'; }, 5000);
+    }
   };
 
-  window.ksSt = function(m, t) {
-    var x = document.getElementById('ks-st');
-    x.textContent = m;
-    x.className = t || 'ks-ok';
-    x.style.display = 'block';
-    if (t !== 'ks-wait') setTimeout(function() { x.style.display = 'none'; }, 4000);
-  };
-
+  // ====== REFRESH LIST ======
   window.ksRef = function() {
     var l = document.getElementById('ks-l');
-    l.innerHTML = '<div class="ks-wait">Loading...</div>';
+    l.innerHTML = '<div class="ks-wait">Loading providers...</div>';
     fetch('/kimi-admin/providers').then(function(r) { return r.json(); }).then(function(d) {
-      if (!d.success || !d.providers) { l.innerHTML = '<div class="ks-bad" style="padding:12px">Failed</div>'; return; }
-      if (d.providers.length === 0) { l.innerHTML = '<div style="color:#888;padding:12px;text-align:center">No providers.</div>'; return; }
+      if (!d.success || !d.providers) {
+        l.innerHTML = '<div class="ks-bad" style="padding:12px;text-align:center;border-radius:6px">Failed to load providers</div>';
+        return;
+      }
+      if (d.providers.length === 0) {
+        l.innerHTML = '<div style="color:var(--ks-faint);padding:12px;text-align:center;font-size:13px">No providers configured.</div>';
+        return;
+      }
       l.innerHTML = d.providers.map(function(p) {
-        var del = (p.id !== 'opencode-zen' && p.id !== 'omniroute') ? '<button class="ks-s ks-d" onclick="ksD(\'' + p.id + '\')">Del</button>' : '';
-        return '<div class="ks-r"><div class="ks-i"><div class="ks-n">' + p.id + '</div><div class="ks-dt">' + p.type + ' &middot; ' + p.base_url + '</div><div class="ks-k">' + (p.has_api_key ? '&#x2705; ' + p.api_key_masked : '&#x26A0;&#xFE0F; No key') + '</div></div><div class="ks-a"><button class="ks-s ks-p" onclick="ksE(\'' + p.id + '\',\'' + p.type + '\',\'' + p.base_url.replace(/'/g, '') + '\')">Edit</button>' + del + '</div></div>';
+        var canDel = (p.id !== 'opencode-zen' && p.id !== 'omniroute');
+        var delBtn = canDel ? '<button class="ks-s ks-d" onclick="ksD(\'' + p.id.replace(/'/g, "\\'") + '\')">Del</button>' : '';
+        var keyStatus = p.has_api_key
+          ? '✅ ' + (p.api_key_masked || 'Key set')
+          : '⚠️ No key';
+        return '<div class="ks-r">' +
+          '<div class="ks-i">' +
+            '<div class="ks-n">' + escHtml(p.id) + '</div>' +
+            '<div class="ks-dt">' + escHtml(p.base_url) + '</div>' +
+            '<div class="ks-k">' + keyStatus + '</div>' +
+          '</div>' +
+          '<div class="ks-a">' +
+            '<button class="ks-s ks-p" onclick="ksE(\'' + p.id.replace(/'/g, "\\'") + '\')">Edit</button>' +
+            delBtn +
+          '</div>' +
+        '</div>';
       }).join('');
-    }).catch(function(e) { l.innerHTML = '<div class="ks-bad" style="padding:12px">' + e.message + '</div>'; });
+    }).catch(function(e) {
+      l.innerHTML = '<div class="ks-bad" style="padding:12px;text-align:center;border-radius:6px">' + escHtml(e.message) + '</div>';
+    });
   };
 
-  window.ksE = function(id, type, url) {
+  // HTML escape helper
+  function escHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ====== EDIT ======
+  window.ksE = function(id) {
     document.getElementById('ks-id').value = id;
-    document.getElementById('ks-url').value = url;
+    document.getElementById('ks-url').value = '';
     document.getElementById('ks-key').value = '';
-    var sel = document.getElementById('ks-typ');
-    var ct = document.getElementById('ks-ctyp');
-    var known = ['openai', 'anthropic', 'google'];
-    if (known.indexOf(type) === -1) { sel.value = 'custom'; ct.value = type; ct.style.display = 'block'; }
-    else { sel.value = type || 'openai'; ct.style.display = 'none'; ct.value = ''; }
-    document.getElementById('ks-em').textContent = 'Editing: ' + id + ' (leave key blank to keep)';
+    document.getElementById('ks-st').style.display = 'none';
+    // Fetch current provider data to fill URL
+    fetch('/kimi-admin/providers').then(function(r) { return r.json(); }).then(function(d) {
+      if (!d.success || !d.providers) return;
+      var p = d.providers.find(function(x) { return x.id === id; });
+      if (p) {
+        document.getElementById('ks-url').value = p.base_url || '';
+        document.getElementById('ks-em').textContent = 'Editing: ' + id;
+      }
+    }).catch(function() {});
   };
 
+  // ====== SAVE ======
   window.ksS = function() {
     var id = document.getElementById('ks-id').value.trim();
     var url = document.getElementById('ks-url').value.trim();
     var key = document.getElementById('ks-key').value.trim();
-    var typ = document.getElementById('ks-typ').value;
-    if (typ === 'custom') { var ct = document.getElementById('ks-ctyp').value.trim(); if (ct) typ = ct; else { ksSt('Enter custom type name', 'ks-bad'); return; } }
-    if (!id || !url) { ksSt('ID and URL required', 'ks-bad'); return; }
-    var b = JSON.stringify({ id: id, type: typ, base_url: url, api_key: key });
-    fetch('/kimi-admin/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b }).then(function(r) { return r.json(); }).then(function(d) {
-      if (d.success) { ksSt('Saved! Restart to apply.', 'ks-ok'); ksRef(); ksCf(); } else { ksSt('Error: ' + (d.error || '?'), 'ks-bad'); }
-    }).catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
+    if (!id) { ksSt('Provider ID is required', 'ks-bad'); return; }
+    if (!url) { ksSt('Base URL is required', 'ks-bad'); return; }
+    var body = JSON.stringify({ id: id, type: 'openai', base_url: url, api_key: key });
+    ksSt('Saving...', 'ks-wait');
+    fetch('/kimi-admin/providers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.success) {
+        ksSt('Saved! Restart daemon to apply changes.', 'ks-ok');
+        ksRef();
+        ksCf();
+      } else {
+        ksSt('Error: ' + (d.error || 'Unknown error'), 'ks-bad');
+      }
+    }).catch(function(e) {
+      ksSt('Error: ' + e.message, 'ks-bad');
+    });
   };
 
+  // ====== DELETE ======
   window.ksD = function(id) {
     if (!confirm('Delete provider "' + id + '"? This removes its models too.')) return;
-    fetch('/kimi-admin/providers/' + encodeURIComponent(id), { method: 'DELETE' }).then(function(r) { return r.json(); }).then(function(d) {
-      if (d.success) { ksSt('Deleted!', 'ks-ok'); ksRef(); } else { ksSt('Error: ' + (d.error || '?'), 'ks-bad'); }
-    }).catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
+    fetch('/kimi-admin/providers/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) { ksSt('Deleted!', 'ks-ok'); ksRef(); }
+        else { ksSt('Error: ' + (d.error || '?'), 'ks-bad'); }
+      })
+      .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
 
+  // ====== RESTART DAEMON ======
   window.ksR = function() {
-    if (!confirm('Restart daemon? Disconnects active chats briefly.')) return;
-    ksSt('Restarting...', 'ks-wait');
-    document.getElementById('ks-st').style.display = 'block';
-    fetch('/kimi-admin/restart-daemon', { method: 'POST' }).then(function(r) { return r.json(); }).then(function(d) {
-      if (d.success) { ksSt('Restart initiated! Reconnecting...', 'ks-ok'); setTimeout(ksRef, 5000); } else { ksSt(d.message || 'Not running', 'ks-bad'); }
-    }).catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
+    if (!confirm('Restart daemon? Active chats will briefly disconnect.')) return;
+    ksSt('Restarting daemon...', 'ks-wait');
+    fetch('/kimi-admin/restart-daemon', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) { ksSt('Restart initiated! Reconnecting...', 'ks-ok'); setTimeout(ksRef, 5000); }
+        else { ksSt(d.message || 'Daemon not running', 'ks-bad'); }
+      })
+      .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };
 
-  // Re-observe in case app removes our button
-  var obs = new MutationObserver(function() {
-    if (!document.getElementById('ks-btn')) {
-      // Button was removed, re-add it (but not the whole panel)
-      var btn = document.createElement('button');
-      btn.id = 'ks-btn';
-      btn.title = 'Provider Settings';
-      btn.innerHTML = '&#x2699;&#xFE0F;';
-      btn.onclick = function() { ksRef(); document.getElementById('ks-modal').style.display = 'flex'; };
-      document.body.appendChild(btn);
+  // ====== TRY TO INJECT INTO KIMI SIDEBAR ======
+  // If Kimi's sidebar has a settings container, add our button there instead
+  var sidebarInjected = false;
+
+  function tryInjectSidebar() {
+    if (sidebarInjected) return;
+    // Look for the settings/sidebar container in Kimi's app
+    // Try various selectors that Kimi might use
+    var targets = [
+      document.querySelector('[class*="sidebar"]'),
+      document.querySelector('[class*="Sidebar"]'),
+      document.querySelector('[class*="settings"]'),
+      document.querySelector('[class*="Settings"]'),
+      document.querySelector('[class*="panel"]'),
+      document.querySelector('[class*="Panel"]'),
+      document.querySelector('[data-testid*="sidebar"]'),
+      document.querySelector('nav'),
+      document.querySelector('aside'),
+      document.querySelector('[class*="menu"]'),
+      document.querySelector('[class*="Menu"]'),
+    ];
+
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      if (t && t.offsetParent !== null) { // visible
+        // Found a sidebar-like container, move our button into it
+        var existingBtn = document.getElementById('ks-btn');
+        if (existingBtn && existingBtn.parentNode === root) {
+          // Add before the first child or at end
+          t.appendChild(existingBtn);
+          sidebarInjected = true;
+          return;
+        }
+      }
     }
+  }
+
+  // Try immediately and on DOM changes
+  tryInjectSidebar();
+  var obs = new MutationObserver(function() {
+    tryInjectSidebar();
   });
   obs.observe(document.body, { childList: true, subtree: true });
+
+  // Refresh list if modal is opened later
+  var openCheck = new MutationObserver(function() {
+    if (modal.classList.contains('ks-open') && document.getElementById('ks-l').children.length === 0) {
+      ksRef();
+    }
+  });
+  openCheck.observe(modal, { attributes: true, attributeFilter: ['class'] });
+
+  // Initial load
+  ksRef();
 })();
