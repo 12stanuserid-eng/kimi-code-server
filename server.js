@@ -892,15 +892,21 @@ const server = http.createServer((req, res) => {
           });
           // Inject workspace IDs into localStorage so sessions appear in UI
           const wsScript = '<script>\n(function(){\n  var ids = ' + JSON.stringify(wsIds) + ';\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    ids.forEach(function(id){ if(o.indexOf(id)===-1) o.push(id); });\n    localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n  } catch(e){}\n})();\n</script>';
-          // WebSocket redirect — patch native WebSocket to route through cloudflared tunnel (bypasses Cloudflare WS block)
-          const tunnelOrigin = tunnelUrl ? (() => { try { return new URL(tunnelUrl).origin; } catch(e) { return null; } })() : null;
+          // WebSocket redirect — only for *.onrender.com (Cloudflare-proxied) domains
+          // Custom domains (e.g. kimicode.dpdns.org) point directly to Render, no Cloudflare WS block
+          const reqHost = req.headers['host'] || '';
+          const isOnRenderDomain = reqHost.endsWith('.onrender.com') || reqHost.includes('.onrender.com:');
           let wsRedirect;
-          if (tunnelOrigin) {
-            // Tunnel URL known — inject directly (synchronous, no fetch needed)
-            wsRedirect = '<script>\n(function(){\n  var targetOrigin = ' + JSON.stringify(tunnelOrigin) + ';\n  var pageOrigin = window.location.origin;\n  var NativeWS = window.WebSocket;\n  window.WebSocket = function(url, protocols) {\n    if (typeof url === "string" && url.indexOf(pageOrigin + "/api/v1/ws") === 0) {\n      url = url.replace(pageOrigin, targetOrigin);\n    }\n    return new NativeWS(url, protocols);\n  };\n  window.WebSocket.prototype = NativeWS.prototype;\n  window.WebSocket.CONNECTING = 0;\n  window.WebSocket.OPEN = 1;\n  window.WebSocket.CLOSING = 2;\n  window.WebSocket.CLOSED = 3;\n})();\n</script>';
-          } else {
-            // Tunnel not ready yet — fetch asynchronously
-            wsRedirect = '<script>\n(function(){\n  var pageOrigin = window.location.origin;\n  var NativeWS = window.WebSocket;\n  var patched = false;\n  function applyPatch(origin) {\n    if (patched) return;\n    patched = true;\n    window.WebSocket = function(url, protocols) {\n      if (typeof url === "string" && url.indexOf(pageOrigin + "/api/v1/ws") === 0) {\n        url = url.replace(pageOrigin, origin);\n      }\n      return new NativeWS(url, protocols);\n    };\n    window.WebSocket.prototype = NativeWS.prototype;\n    window.WebSocket.CONNECTING = 0;\n    window.WebSocket.OPEN = 1;\n    window.WebSocket.CLOSING = 2;\n    window.WebSocket.CLOSED = 3;\n  }\n  fetch("/kimi-admin/tunnel-status").then(function(r){return r.json()}).then(function(d){\n    if (d.is_ready && d.tunnel_url) {\n      try { applyPatch(new URL(d.tunnel_url).origin); } catch(e){}\n    }\n  }).catch(function(){});\n  requestAnimationFrame(function(){\n    if (!patched) {\n      fetch("/kimi-admin/tunnel-status").then(function(r){return r.json()}).then(function(d){\n        if (d.is_ready && d.tunnel_url) {\n          try { applyPatch(new URL(d.tunnel_url).origin); } catch(e){}\n        }\n      }).catch(function(){});\n    }\n  });\n})();\n</script>';
+          if (isOnRenderDomain && tunnelUrl) {
+            // Cloudflare blocks WS on *.onrender.com — redirect through cloudflared tunnel
+            const tunnelOrigin = (() => { try { return new URL(tunnelUrl).origin; } catch(e) { return null; } })();
+            if (tunnelOrigin) {
+              wsRedirect = '<script>\n(function(){\n  var targetOrigin = ' + JSON.stringify(tunnelOrigin) + ';\n  var pageOrigin = window.location.origin;\n  var NativeWS = window.WebSocket;\n  window.WebSocket = function(url, protocols) {\n    if (typeof url === "string" && url.indexOf(pageOrigin + "/api/v1/ws") === 0) {\n      url = url.replace(pageOrigin, targetOrigin);\n    }\n    return new NativeWS(url, protocols);\n  };\n  window.WebSocket.prototype = NativeWS.prototype;\n  window.WebSocket.CONNECTING = 0;\n  window.WebSocket.OPEN = 1;\n  window.WebSocket.CLOSING = 2;\n  window.WebSocket.CLOSED = 3;\n})();\n</script>';
+            }
+          }
+          // For custom domains (no Cloudflare), no WS redirect needed — direct connection works fine
+          if (!wsRedirect) {
+            wsRedirect = '<!-- WS direct: ' + (isOnRenderDomain ? 'tunnel not ready' : 'custom domain - no redirect needed') + ' -->';
           }
           const settingsPanelScript = '<link rel="stylesheet" href="/kimi-admin/panel.css"><script src="/kimi-admin/panel.js"></script>';
           const allScripts = wsScript + '\n' + wsRedirect + '\n' + settingsPanelScript;
