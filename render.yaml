@@ -11,7 +11,7 @@ services:
       - key: NODE_VERSION
         value: 18.18.0
       - key: KIMI_DEFAULT_MODEL
-        value: opencode-nemotron
+        value: opencode-zen-nemotron
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENCODE_API_KEY
