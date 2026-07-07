@@ -28,8 +28,8 @@
         '</div>' +
         '<div style="padding:16px 20px 20px;overflow-y:auto;flex:1;min-height:0;">' +
           '<div id="ks-st" style="font-size:12px;padding:6px 10px;border-radius:6px;margin-bottom:10px;display:none;line-height:1.4;"></div>' +
-          '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;"></div>' +
-          '<div id="ks-frm">' +
+          '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;overflow-y:auto;max-height:280px;flex-shrink:0;"></div>' +
+          '<div id="ks-frm" style="flex-shrink:0;">' +
             '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">Provider ID</label>' +
             '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false" style="width:100%;padding:8px 10px;margin-bottom:10px;border:1px solid var(--color-line,#2d333b);border-radius:6px;background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;">' +
             '<label style="display:block;margin:0 0 3px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.04em;">Base URL</label>' +
@@ -89,14 +89,15 @@
     // Create provider settings row matching Kimi's row style
     var row = document.createElement('div');
     row.id = 'ks-srow';
-    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;cursor:pointer;transition:background 0.15s;';
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 16px;cursor:pointer;border-top:1px solid var(--color-line,#2d333b);transition:background 0.15s;';
 
     var left = document.createElement('div');
-    left.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;';
-    left.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--color-text,#c9cdd4);">Provider Settings</div>';
+    left.style.cssText = 'flex:1;min-width:0;';
+    left.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--color-text,#c9cdd4);">Provider Settings</div>' +
+      '<div style="font-size:11px;color:var(--color-text-muted,#9aa0a8);margin-top:1px;">Manage custom LLM providers</div>';
 
     var right = document.createElement('div');
-    right.style.cssText = 'display:flex;align-items:center;color:var(--color-text-faint,#6b7280);font-size:13px;';
+    right.style.cssText = 'display:flex;align-items:center;gap:4px;color:var(--color-text-faint,#6b7280);font-size:13px;';
     right.innerHTML = cogSvg;
 
     row.appendChild(left);
@@ -110,7 +111,7 @@
       ksRef();
     };
 
-    row.onmouseenter = function() { this.style.background = 'var(--color-surface-hover,rgba(255,255,255,0.06))'; };
+    row.onmouseenter = function() { this.style.background = 'var(--color-surface,#161b22)'; };
     row.onmouseleave = function() { this.style.background = 'transparent'; };
 
     // Insert before Sign out
