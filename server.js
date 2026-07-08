@@ -329,11 +329,73 @@ function performBackup() {
     lastBackupTime = new Date().toISOString();
     lastBackupSize = localResult.size;
     lastBackupStatus = remoteOk ? 'success (local + remote)' : 'success (local only)';
+
+    // Sync check — if remote failed, retry next cycle; if local missing, pull from remote
+    if (!remoteOk) {
+      log('🔄 Sync: remote backup pending, will retry next cycle');
+    }
     return true;
   } catch (err) {
     lastBackupStatus = `failed: ${err.message}`;
     return false;
   } finally { backupInProgress = false; }
+}
+
+// ====== SYNC: verify both local + Pentaract have data ======
+
+function syncBothLocations() {
+  // Step 1: Check what we have locally
+  const localBk = getLatestLocalBackup();
+  const hasLocal = localBk !== null;
+
+  // Step 2: Check what Pentaract has
+  let hasRemote = false;
+  let remoteName = null;
+  try {
+    const token = pentaractLogin();
+    const listResult = execSync(`curl ${CURL_FLAGS} "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/tree?path=backups" \
+      -H "Authorization: Bearer ${token}"`, { timeout: 15000, encoding: 'utf8' });
+    if (!listResult.trim().startsWith('<')) {
+      const data = JSON.parse(listResult);
+      if (data.files && data.files.length > 0) {
+        data.files.sort((a, b) => b.path.localeCompare(a.path));
+        hasRemote = true;
+        remoteName = data.files[0].path;
+      }
+    }
+  } catch (e) {}
+
+  // Step 3: Sync based on what's available
+  if (hasLocal && hasRemote) {
+    log('✅ Sync: both local and Pentaract have backups — OK');
+    return;
+  }
+
+  if (hasLocal && !hasRemote) {
+    // Local has data, Pentaract doesn't — upload local to Pentaract
+    log('🔄 Sync: uploading local backup to Pentaract (remote missing)');
+    try {
+      performRemoteBackup(localBk.file);
+      log('✅ Sync: local → Pentaract done');
+    } catch (e) {
+      log(`⚠️ Sync: local → Pentaract failed: ${e.message}`);
+    }
+    return;
+  }
+
+  if (!hasLocal && hasRemote) {
+    // Pentaract has data, local doesn't — download from Pentaract
+    log('🔄 Sync: downloading from Pentaract (local missing)');
+    try {
+      restoreFromPentaract();
+      log('✅ Sync: Pentaract → local done');
+    } catch (e) {
+      log(`⚠️ Sync: Pentaract → local failed: ${e.message}`);
+    }
+    return;
+  }
+
+  log('ℹ️ Sync: no backups anywhere — will create on next backup cycle');
 }
 
 // ====== WORKSPACE ROOT PATCHING ======
@@ -1520,7 +1582,7 @@ server.listen(PORT, '0.0.0.0', () => {
   log('💾 Backup system v2 — local + Pentaract dual backup active');
   log('🚇 Cloudflare Tunnel will start in 10s — check /tunnel-url for the URL');
   // Start backup scheduler after 20s (gives Kimi daemon time to initialize)
-  setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
+  setTimeout(() => { checkAndRestore(); startBackupScheduler(); syncBothLocations(); }, 20000);
 });
 
 // Crash recovery — prevent event-loop-blocking backup from killing the server
