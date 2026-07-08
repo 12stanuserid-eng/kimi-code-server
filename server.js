@@ -622,7 +622,7 @@ function fixSessionHomedirPaths() {
       }
     }
     if (fixed > 0) log(`✅ Fixed homedir paths in ${fixed} session state.json files`);
-    // Also fix session_index.jsonl
+    // Also fix session_index.jsonl — must fix BOTH sessionDir and workDir paths
     const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
     if (fs.existsSync(indexPath)) {
       const lines = fs.readFileSync(indexPath, 'utf8').split('\n').filter(Boolean);
@@ -630,10 +630,17 @@ function fixSessionHomedirPaths() {
       const newLines = lines.map(line => {
         try {
           const entry = JSON.parse(line);
+          let changed = false;
           if (entry.sessionDir && !entry.sessionDir.startsWith(KIMI_HOME)) {
             entry.sessionDir = entry.sessionDir.replace(/\/root\/\.kimi-code/g, KIMI_HOME);
-            idxFixed++;
+            changed = true;
           }
+          if (entry.workDir && entry.workDir.startsWith('/root')) {
+            const renderHome = path.dirname(KIMI_HOME);
+            entry.workDir = entry.workDir.replace('/root', renderHome);
+            changed = true;
+          }
+          if (changed) idxFixed++;
           return JSON.stringify(entry);
         } catch(e) { return line; }
       });
@@ -651,6 +658,12 @@ function fixSessionHomedirPaths() {
 // The daemon uses session_index.jsonl to list sessions via the API.
 // If it's missing or empty after a restore, the API returns 0 sessions.
 // This function rebuilds it from the sessions directory on disk.
+//
+// CRITICAL: The daemon's readSessionIndex() requires exactly these fields:
+//   { sessionId, sessionDir, workDir }
+// - sessionDir must be an absolute path inside the sessions/ directory
+// - workDir must be an absolute path to the workspace root (NOT workspaceId!)
+// - basename(sessionDir) must equal sessionId
 function regenerateSessionIndex() {
   try {
     const sessionsDir = path.join(KIMI_HOME, 'sessions');
@@ -659,35 +672,43 @@ function regenerateSessionIndex() {
       log('⚠️ regenerateSessionIndex: sessions dir not found');
       return;
     }
+
+    // Read workspaces.json to map bucket IDs → workspace root paths (workDir)
+    const wsMap = {}; // bucketId -> workDir (absolute path)
+    try {
+      const wsPath = path.join(KIMI_HOME, 'workspaces.json');
+      if (fs.existsSync(wsPath)) {
+        const wsData = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
+        for (const [id, ws] of Object.entries(wsData.workspaces || {})) {
+          if (ws.root) wsMap[id] = ws.root;
+        }
+      }
+    } catch(e) {
+      log(`⚠️ Could not read workspaces.json: ${e.message}`);
+    }
+
     const entries = [];
+    let skipped = 0;
     const wsDirs = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter(d => d.isDirectory());
     for (const ws of wsDirs) {
       const wsPath = path.join(sessionsDir, ws.name);
+      // Look up workDir for this bucket — must be absolute path
+      const workDir = wsMap[ws.name] || path.join(path.dirname(KIMI_HOME), ws.name.replace(/^wd_/, '').replace(/_[a-f0-9]+$/, ''));
       const sessDirs = fs.readdirSync(wsPath, { withFileTypes: true }).filter(d => d.isDirectory());
       for (const sess of sessDirs) {
-        const stateFile = path.join(wsPath, sess.name, 'state.json');
-        if (!fs.existsSync(stateFile)) continue;
-        try {
-          const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-          entries.push({
-            sessionId: sess.name,
-            workspaceId: ws.name,
-            sessionDir: path.join(wsPath, sess.name),
-            createdAt: state.createdAt || state.created_at || new Date().toISOString(),
-            title: state.title || state.name || sess.name,
-          });
-        } catch(e) {
-          // If state.json is invalid, still add a basic entry
-          entries.push({
-            sessionId: sess.name,
-            workspaceId: ws.name,
-            sessionDir: path.join(wsPath, sess.name),
-          });
-        }
+        const sessionDir = path.join(wsPath, sess.name);
+        // Daemon requires: basename(sessionDir) === sessionId
+        // Also requires sessionDir and workDir to be absolute paths
+        entries.push({
+          sessionId: sess.name,
+          sessionDir: sessionDir,
+          workDir: workDir,
+        });
       }
     }
+    // Write entries — daemon expects exactly: {"sessionId":"...","sessionDir":"...","workDir":"..."}
     fs.writeFileSync(indexPath, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
-    log(`✅ Regenerated session_index.jsonl with ${entries.length} sessions`);
+    log(`✅ Regenerated session_index.jsonl with ${entries.length} sessions (workDir mapped for ${Object.keys(wsMap).length} workspaces)`);
   } catch (err) {
     log(`⚠️ regenerateSessionIndex failed: ${err.message}`);
   }
