@@ -21,7 +21,7 @@
     modal.id = 'ks-modal';
     modal.style.cssText = 'position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);backdrop-filter:blur(2px);';
     modal.innerHTML =
-      '<div id="ks-box" style="background:var(--color-surface-raised, #1c2128);border:1px solid var(--color-line, #2d333b);border-radius:var(--radius-xl, 12px);box-shadow:var(--shadow-xl, 0 8px 32px rgba(0,0,0,0.5));width:min(440px,calc(100vw-32px));max-height:min(420px,calc(100vh-40px));display:flex;flex-direction:column;color:var(--color-text,#c9cdd4);font-family:var(--font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);overflow:hidden;animation:ks-fade-in 0.15s ease;">' +
+      '<div id="ks-box" style="background:var(--color-surface-raised, #1c2128);border:1px solid var(--color-line, #2d333b);border-radius:var(--radius-xl, 12px);box-shadow:var(--shadow-xl, 0 8px 32px rgba(0,0,0,0.5));width:min(380px,calc(100vw-32px));max-height:min(420px,calc(100vh-40px));display:flex;flex-direction:column;color:var(--color-text,#c9cdd4);font-family:var(--font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);overflow:hidden;animation:ks-fade-in 0.15s ease;">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px 6px;border-bottom:1px solid var(--color-line,#2d333b);flex-shrink:0;">' +
           '<h2 style="margin:0;font-size:13px;font-weight:600;color:var(--color-text,#c9cdd4);">Provider Settings</h2>' +
           '<button onclick="ksC()" aria-label="Close" style="background:none;border:none;color:var(--color-text-faint,#6b7280);font-size:14px;cursor:pointer;padding:2px 6px;border-radius:var(--radius-md,6px);line-height:1;">✕</button>' +
