@@ -43,6 +43,7 @@ const KIMI_HOME = process.env['KIMI_CODE_HOME'] || path.join(os.homedir(), '.kim
 let lastBackupTime = null;
 let lastBackupSize = 0;
 let lastBackupStatus = 'never';
+let backupInProgress = false;
 
 function log(m) {
   debugLog.push(`[${new Date().toISOString()}] ${m}`);
@@ -192,14 +193,20 @@ function scheduleRestart() {
   }, RESTART_DELAY_MS);
 }
 
-// ====== PENTARACT BACKUP / RESTORE ======
+// ====== PENTARACT BACKUP / RESTORE (v2 — local fallback + proper headers) ======
+
+const CURL_FLAGS = '-s --max-time 30 -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 KimiCodeBackup/1.0"';
+const LOCAL_BACKUP_DIR = path.join(os.tmpdir(), 'kimi-backups');
+const LOCAL_BACKUP_MAX = 5;
 
 function pentaractLogin() {
   try {
-    const result = execSync(`curl -s -X POST "${PENTARACT_URL}/api/auth/login" \
+    const result = execSync(`curl ${CURL_FLAGS} -X POST "${PENTARACT_URL}/api/auth/login" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
       -d "email=${encodeURIComponent(PENTARACT_EMAIL)}" -d "password=${encodeURIComponent(PENTARACT_PASS)}"`, {
-      timeout: 15000, encoding: 'utf8'
+      timeout: 20000, encoding: 'utf8'
     });
+    if (result.trim().startsWith('<')) throw new Error('Got HTML instead of JSON (Cloudflare challenge)');
     const data = JSON.parse(result);
     if (!data.access_token) throw new Error('No access_token in response');
     return data.access_token;
@@ -208,105 +215,147 @@ function pentaractLogin() {
   }
 }
 
-function performBackup() {
+// ====== LOCAL BACKUP (always works, no network needed) ======
+
+function ensureLocalBackupDir() {
+  try { fs.mkdirSync(LOCAL_BACKUP_DIR, { recursive: true }); } catch (e) {}
+}
+
+function performLocalBackup() {
+  ensureLocalBackupDir();
+  const backupName = `kimi-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
+  const tarFile = path.join(LOCAL_BACKUP_DIR, backupName);
+  try {
+    const excludes = ['logs', 'cache', 'tmp', 'node_modules'].map(e => `--exclude='${KIMI_HOME}/${e}'`).join(' ');
+    execSync(`tar -czf "${tarFile}" ${excludes} -C "${path.dirname(KIMI_HOME)}" "${path.basename(KIMI_HOME)}" 2>/dev/null`, { timeout: 30000 });
+    const stats = fs.statSync(tarFile);
+    log(`✅ Local backup: ${backupName} (${(stats.size / 1024).toFixed(1)} KB)`);
+    // Prune old local backups
+    try {
+      const files = fs.readdirSync(LOCAL_BACKUP_DIR)
+        .filter(f => f.startsWith('kimi-backup-') && f.endsWith('.tar.gz'))
+        .sort().reverse();
+      files.slice(LOCAL_BACKUP_MAX).forEach(f => {
+        try { fs.unlinkSync(path.join(LOCAL_BACKUP_DIR, f)); } catch (e) {}
+      });
+    } catch (e) {}
+    return { file: tarFile, size: stats.size, name: backupName };
+  } catch (err) {
+    log(`❌ Local backup failed: ${err.message}`);
+    return null;
+  }
+}
+
+function getLatestLocalBackup() {
+  ensureLocalBackupDir();
+  try {
+    const files = fs.readdirSync(LOCAL_BACKUP_DIR)
+      .filter(f => f.startsWith('kimi-backup-') && f.endsWith('.tar.gz'))
+      .sort().reverse();
+    if (files.length === 0) return null;
+    const latest = path.join(LOCAL_BACKUP_DIR, files[0]);
+    const stats = fs.statSync(latest);
+    return { file: latest, size: stats.size, name: files[0], mtime: stats.mtime };
+  } catch (e) { return null; }
+}
+
+function restoreFromLocalBackup(backupPath) {
+  try {
+    if (!fs.existsSync(backupPath)) throw new Error('Backup file not found');
+    log(`🔄 Restoring from local: ${path.basename(backupPath)}`);
+    execSync(`tar -xzf "${backupPath}" -C "${path.dirname(KIMI_HOME)}"`, { timeout: 30000 });
+    log('✅ Local restore completed');
+    patchWorkspaceRoots();
+    return true;
+  } catch (err) {
+    log(`❌ Local restore failed: ${err.message}`);
+    return false;
+  }
+}
+
+// ====== PENTARACT REMOTE ======
+
+function performRemoteBackup(localTarFile) {
   try {
     const token = pentaractLogin();
-    const backupName = `kimi-code-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
-    const tarFile = `/tmp/${backupName}`;
-
-    // Create tar.gz of ~/.kimi-code/ (skip logs/cache to keep it small)
-    execSync(`tar -czf ${tarFile} --exclude='${KIMI_HOME}/logs' --exclude='${KIMI_HOME}/cache' \
-      -C ${path.dirname(KIMI_HOME)} ${path.basename(KIMI_HOME)} 2>/dev/null`, { timeout: 30000 });
-
-    const stats = fs.statSync(tarFile);
-
-    // Upload to Pentaract via curl
-    const uploadResult = execSync(`curl -s -X POST "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/upload" \
+    execSync(`curl ${CURL_FLAGS} -X POST "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/upload" \
       -H "Authorization: Bearer ${token}" \
-      -F "file=@${tarFile}" -F "path=/backups/"`, { timeout: 60000, encoding: 'utf8' });
+      -F "file=@${localTarFile}" -F "path=/backups/"`, { timeout: 60000, encoding: 'utf8' });
+    log(`✅ Pentaract remote backup uploaded`);
+    return true;
+  } catch (err) {
+    log(`⚠️ Pentaract remote failed: ${err.message} (local backup still safe)`);
+    return false;
+  }
+}
 
-    // Cleanup temp file
-    try { fs.unlinkSync(tarFile); } catch (e) {}
+function restoreFromPentaract() {
+  try {
+    const token = pentaractLogin();
+    const listResult = execSync(`curl ${CURL_FLAGS} "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/tree?path=backups" \
+      -H "Authorization: Bearer ${token}"`, { timeout: 15000, encoding: 'utf8' });
+    if (listResult.trim().startsWith('<')) throw new Error('Cloudflare challenge on list');
+    const data = JSON.parse(listResult);
+    if (!data.files || data.files.length === 0) { log('ℹ️ No remote backups found'); return false; }
+    data.files.sort((a, b) => b.path.localeCompare(a.path));
+    const latest = data.files[0];
+    log(`🔄 Downloading from Pentaract: ${latest.path}`);
+    const tempFile = '/tmp/pentaract-restore.tar.gz';
+    execSync(`curl ${CURL_FLAGS} "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${latest.path}" \
+      -H "Authorization: Bearer ${token}" -o "${tempFile}"`, { timeout: 120000 });
+    // Validate tar.gz magic bytes
+    const buf = fs.readFileSync(tempFile);
+    if (buf[0] !== 0x1f || buf[1] !== 0x8b) throw new Error('Downloaded file is not valid tar.gz');
+    execSync(`tar -xzf "${tempFile}" -C "${path.dirname(KIMI_HOME)}" && rm -f "${tempFile}"`, { timeout: 30000 });
+    log('✅ Pentaract restore completed');
+    patchWorkspaceRoots();
+    return true;
+  } catch (err) {
+    log(`❌ Pentaract restore failed: ${err.message}`);
+    return false;
+  }
+}
 
+// ====== COMBINED BACKUP ======
+
+function performBackup() {
+  if (backupInProgress) { log('⚠️ Backup already in progress, skipping'); return false; }
+  backupInProgress = true;
+  try {
+    const localResult = performLocalBackup();
+    if (!localResult) { lastBackupStatus = 'failed: local backup failed'; return false; }
+    let remoteOk = false;
+    try { remoteOk = performRemoteBackup(localResult.file); } catch (e) {}
     lastBackupTime = new Date().toISOString();
-    lastBackupSize = stats.size;
-    lastBackupStatus = 'success';
-    log(`✅ Backup completed: ${backupName} (${(stats.size / 1024).toFixed(1)} KB)`);
+    lastBackupSize = localResult.size;
+    lastBackupStatus = remoteOk ? 'success (local + remote)' : 'success (local only)';
     return true;
   } catch (err) {
     lastBackupStatus = `failed: ${err.message}`;
-    log(`❌ Backup failed: ${err.message}`);
     return false;
-  }
+  } finally { backupInProgress = false; }
 }
 
-function restoreLatestBackup() {
+// ====== WORKSPACE ROOT PATCHING ======
+
+function patchWorkspaceRoots() {
   try {
-    const token = pentaractLogin();
-
-    // List backup files
-    const listResult = execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/tree?path=backups" \
-      -H "Authorization: Bearer ${token}"`, { timeout: 15000, encoding: 'utf8' });
-    const data = JSON.parse(listResult);
-
-    if (!data.files || data.files.length === 0) {
-      log('ℹ️ No backups found on Pentaract, skipping restore');
-      return false;
+    const wsPath = path.join(KIMI_HOME, 'workspaces.json');
+    if (!fs.existsSync(wsPath)) return;
+    const wsData = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
+    let patched = false;
+    const renderHome = path.dirname(KIMI_HOME);
+    for (const [id, ws] of Object.entries(wsData.workspaces || {})) {
+      const oldRoot = ws.root || '';
+      if (oldRoot === '/root') { ws.root = renderHome; patched = true; }
+      else if (oldRoot === '/root/.kimi-code') { ws.root = KIMI_HOME; patched = true; }
+      else if (oldRoot.startsWith('/root/')) { ws.root = oldRoot.replace('/root', renderHome); patched = true; }
     }
-
-    // Sort by path descending to get latest backup
-    data.files.sort((a, b) => b.path.localeCompare(a.path));
-    const latest = data.files[0];
-
-    log(`🔄 Restoring from: ${latest.path} (${(latest.size / 1024).toFixed(1)} KB)`);
-
-    // Download backup (path already has slashes for FastAPI's {path:path} capture)
-    execSync(`curl -s "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${latest.path}" \
-      -H "Authorization: Bearer ${token}" -o /tmp/restore-kimi.tar.gz`, { timeout: 120000 });
-
-    // Extract to correct KIMI_HOME parent directory
-    execSync(`tar -xzf /tmp/restore-kimi.tar.gz -C ${path.dirname(KIMI_HOME)} && rm -f /tmp/restore-kimi.tar.gz`, { timeout: 30000 });
-
-    log('✅ Restore completed successfully');
-
-    // Patch workspace roots in workspaces.json so Kimi doesn't stat inaccessible /root/ paths
-    try {
-      const wsPath = path.join(KIMI_HOME, 'workspaces.json');
-      if (fs.existsSync(wsPath)) {
-        const wsData = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
-        let patched = false;
-        const renderHome = path.dirname(KIMI_HOME); // e.g. /opt/render (user's home on Render)
-        for (const [id, ws] of Object.entries(wsData.workspaces || {})) {
-          const oldRoot = ws.root || '';
-          if (oldRoot === '/root') {
-            ws.root = renderHome;
-            log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
-            patched = true;
-          } else if (oldRoot === '/root/.kimi-code') {
-            ws.root = KIMI_HOME;
-            log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
-            patched = true;
-          } else if (oldRoot.startsWith('/root/')) {
-            ws.root = oldRoot.replace('/root', renderHome);
-            log(`🔄 Workspace ${id}: root ${oldRoot} -> ${ws.root}`);
-            patched = true;
-          }
-        }
-        if (patched) {
-          fs.writeFileSync(wsPath, JSON.stringify(wsData, null, 2));
-          log('✅ Workspace roots patched for Render environment');
-        }
-      }
-    } catch (e) {
-      log(`⚠️ Workspace patch skipped: ${e.message}`);
-    }
-
-    return true;
-  } catch (err) {
-    log(`❌ Restore failed: ${err.message}`);
-    return false;
-  }
+    if (patched) { fs.writeFileSync(wsPath, JSON.stringify(wsData, null, 2)); log('✅ Workspace roots patched'); }
+  } catch (e) {}
 }
+
+// ====== SMART RESTORE ======
 
 function checkAndRestore() {
   const sessionsDir = path.join(KIMI_HOME, 'sessions');
@@ -314,18 +363,41 @@ function checkAndRestore() {
   try {
     if (fs.existsSync(sessionsDir)) {
       const items = fs.readdirSync(sessionsDir);
-      if (items.length === 0) needsRestore = true;
-    } else {
-      needsRestore = true;
-    }
-  } catch (e) {
-    needsRestore = true;
-  }
+      if (items.length === 0) { needsRestore = true; }
+      else {
+        let hasSessions = false;
+        for (const item of items) {
+          try {
+            const itemPath = path.join(sessionsDir, item);
+            if (fs.statSync(itemPath).isDirectory() && fs.readdirSync(itemPath).length > 0) {
+              hasSessions = true; break;
+            }
+          } catch (e) {}
+        }
+        if (!hasSessions) needsRestore = true;
+      }
+    } else { needsRestore = true; }
+  } catch (e) { needsRestore = true; }
+
   if (needsRestore) {
-    log('🔍 Sessions data missing, attempting restore from Pentaract...');
-    restoreLatestBackup();
+    log('🔄 Sessions missing — attempting restore...');
+    // Try local first
+    const localBackup = getLatestLocalBackup();
+    if (localBackup) {
+      log(`📦 Found local backup: ${localBackup.name}`);
+      if (restoreFromLocalBackup(localBackup.file)) return true;
+    }
+    // Fall back to Pentaract
+    if (restoreFromPentaract()) {
+      try { performLocalBackup(); } catch (e) {}
+      return true;
+    }
+    log('⚠️ No backup source available — starting fresh');
+    return false;
   } else {
-    log('✅ Sessions data found locally, no restore needed');
+    log('✅ Sessions found locally');
+    try { performLocalBackup(); } catch (e) {}
+    return true;
   }
 }
 
@@ -695,17 +767,19 @@ const server = http.createServer((req, res) => {
     }));
   }
 
-  // Backup status endpoint
+  // Backup status endpoint (redirect to admin version)
   if (req.url === '/backup-status') {
     res.writeHead(200, {'Content-Type': 'application/json'});
     return res.end(JSON.stringify({
       last_backup: lastBackupTime,
       last_size_bytes: lastBackupSize,
       last_status: lastBackupStatus,
+      backup_in_progress: backupInProgress,
       storage_id: BACKUP_STORAGE_ID,
       pentaract_url: PENTARACT_URL,
       backup_interval_min: BACKUP_INTERVAL_MIN,
-      kimi_home: KIMI_HOME
+      kimi_home: KIMI_HOME,
+      note: 'Use /kimi-admin/backup-status for full details'
     }));
   }
 
@@ -973,6 +1047,70 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({
       success: ok,
       message: ok ? 'Daemon restart initiated (auto-restarts in ~5s)' : 'Daemon not running'
+    }));
+  }
+
+  // POST /kimi-admin/backup-now — trigger immediate backup (local + Pentaract)
+  if (req.url === '/kimi-admin/backup-now' && req.method === 'POST') {
+    if (backupInProgress) {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      return res.end(JSON.stringify({ success: false, message: 'Backup already in progress' }));
+    }
+    (async () => {
+      const ok = performBackup();
+      const localBk = getLatestLocalBackup();
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({
+        success: ok,
+        status: lastBackupStatus,
+        last_backup: lastBackupTime,
+        local_backup: localBk ? { name: localBk.name, size_kb: (localBk.size / 1024).toFixed(1) } : null
+      }));
+    })();
+    return;
+  }
+
+  // POST /kimi-admin/backup-restore — restore from latest backup
+  if (req.url === '/kimi-admin/backup-restore' && req.method === 'POST') {
+    let restored = false;
+    // Try local first
+    const localBk = getLatestLocalBackup();
+    if (localBk) {
+      restored = restoreFromLocalBackup(localBk.file);
+    }
+    // Try Pentaract if local didn't work
+    if (!restored) {
+      restored = restoreFromPentaract();
+    }
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({
+      success: restored,
+      message: restored
+        ? 'Restore completed. Restart daemon to apply.'
+        : 'No backup found or restore failed',
+      local_backup: localBk ? localBk.name : null
+    }));
+    return;
+  }
+
+  // GET /kimi-admin/backup-status — detailed backup status
+  if (req.url === '/kimi-admin/backup-status' && req.method === 'GET') {
+    const localBk = getLatestLocalBackup();
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    return res.end(JSON.stringify({
+      last_backup: lastBackupTime,
+      last_size_bytes: lastBackupSize,
+      last_status: lastBackupStatus,
+      backup_in_progress: backupInProgress,
+      local_backup: localBk ? {
+        name: localBk.name,
+        size_kb: (localBk.size / 1024).toFixed(1),
+        created: localBk.mtime
+      } : null,
+      local_backup_dir: LOCAL_BACKUP_DIR,
+      pentaract_url: PENTARACT_URL,
+      backup_interval_min: BACKUP_INTERVAL_MIN,
+      kimi_home: KIMI_HOME
     }));
   }
 
@@ -1314,7 +1452,7 @@ server.listen(PORT, '0.0.0.0', () => {
   setInterval(checkDaemon, 30000);
   // Start Cloudflare Tunnel after 10s (gives Kimi daemon time to start)
   setTimeout(startCloudflareTunnel, 10000);
-  log('💾 Backups enabled — Pentaract persistence active');
+  log('💾 Backup system v2 — local + Pentaract dual backup active');
   log('🚇 Cloudflare Tunnel will start in 10s — check /tunnel-url for the URL');
   // Start backup scheduler after 20s (gives Kimi daemon time to initialize)
   setTimeout(() => { checkAndRestore(); startBackupScheduler(); }, 20000);
