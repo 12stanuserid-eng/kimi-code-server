@@ -794,17 +794,18 @@ const server = http.createServer((req, res) => {
   if (req.url === '/kimi-admin/providers' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type': 'application/json'});
     const providers = readProvidersFromConfig();
-    // Count models per provider
-    let configRaw = '';
-    try { configRaw = fs.readFileSync(getConfigPath(), 'utf8'); } catch(e) {}
+    // Count models per provider by scanning config lines
+    let configLines = [];
+    try { configLines = fs.readFileSync(getConfigPath(), 'utf8').split('\n'); } catch(e) {}
     const list = Object.values(providers).map(p => {
-      // Count models that reference this provider
-      const nameRegex = new RegExp(`\\[models\\."?${escapeRegex(p.id)}-`, 'g');
-      const refRegex = new RegExp(`provider\\s*=\\s*"${escapeRegex(p.id)}"`, 'g');
       let modelCount = 0;
-      let m;
-      while ((m = nameRegex.exec(configRaw)) !== null) modelCount++;
-      while ((m = refRegex.exec(configRaw)) !== null) modelCount++;
+      for (let i = 0; i < configLines.length; i++) {
+        const line = configLines[i];
+        // Match [models."providerId-..."] or [models.providerId-...]
+        if (line.includes('[models.') && line.includes(p.id + '-')) {
+          modelCount++;
+        }
+      }
       return {
         id: p.id,
         type: p.type,
@@ -941,19 +942,21 @@ const server = http.createServer((req, res) => {
   if (providerModelsMatch && req.method === 'GET') {
     const providerId = decodeURIComponent(providerModelsMatch[1]);
     try {
-      const configPath = getConfigPath();
-      const raw = fs.readFileSync(configPath, 'utf8');
+      const configLines = fs.readFileSync(getConfigPath(), 'utf8').split('\n');
       const models = [];
-      // Find all [models."<providerId>-..."] sections
-      const regex = new RegExp(`\\[models\\."?${escapeRegex(providerId)}-([^\\]"]+)["\\]]`, 'g');
-      let m;
-      while ((m = regex.exec(raw)) !== null) {
-        models.push(m[1]);
-      }
-      // Also find models with provider = "<providerId>" line
-      const refRegex = new RegExp(`\\[models\\.([^\\]]+)\\]\\n\\s*provider\\s*=\\s*"${escapeRegex(providerId)}"`, 'g');
-      while ((m = refRegex.exec(raw)) !== null) {
-        if (!models.includes(m[1])) models.push(m[1]);
+      for (let i = 0; i < configLines.length; i++) {
+        const line = configLines[i];
+        // Match [models."providerId-modelname"] or [models.providerId-modelname]
+        if (line.includes('[models.') && line.includes(providerId + '-')) {
+          // Extract model name from section header
+          const m = line.match(/\[models\."?([^\]"]+)"?\]/);
+          if (m) {
+            const fullName = m[1];
+            // Strip provider prefix to get raw model name
+            const rawName = fullName.startsWith(providerId + '-') ? fullName.substring(providerId.length + 1) : fullName;
+            models.push(rawName);
+          }
+        }
       }
       res.writeHead(200, {'Content-Type': 'application/json'});
       return res.end(JSON.stringify({ success: true, provider_id: providerId, models, count: models.length }));
