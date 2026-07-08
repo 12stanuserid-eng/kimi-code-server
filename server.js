@@ -304,10 +304,14 @@ function restoreFromLocalBackup(backupPath) {
   try {
     if (!fs.existsSync(backupPath)) throw new Error('Backup file not found');
     log(`🔄 Restoring from local: ${path.basename(backupPath)}`);
-    // New backup format: files are relative to KIMI_HOME (sessions/, config.toml, workspaces.json)
+    // Detect format: old backups have `.kimi-code/` prefix paths
+    const tarList = execSync(`tar -tzf "${backupPath}" 2>/dev/null`, { encoding: 'utf8' });
+    const firstPaths = tarList.trim().split('\n').slice(0, 5);
+    const hasDotKimiPrefix = firstPaths.some(p => p.startsWith('.kimi-code/'));
+    const extractDir = hasDotKimiPrefix ? path.dirname(KIMI_HOME) : KIMI_HOME;
     // Ensure KIMI_HOME exists
     fs.mkdirSync(KIMI_HOME, { recursive: true });
-    execSync(`tar -xzf "${backupPath}" -C "${KIMI_HOME}"`, { timeout: 30000 });
+    execSync(`tar -xzf "${backupPath}" -C "${extractDir}"`, { timeout: 30000 });
     log('✅ Local restore completed');
     patchWorkspaceRoots();
     return true;
@@ -481,9 +485,11 @@ function restoreFromPentaract() {
         // Check if it has sessions
         const tarList = execSync(`tar -tzf "${tempFile}" 2>/dev/null`, { encoding: 'utf8' });
         if (!tarList.includes('sessions/')) { log(`⚠️ No sessions in ${bk.path}, skipping`); continue; }
-        const isNewFormat = tarList.includes('config.toml');
-        const extractDir = isNewFormat ? KIMI_HOME : path.dirname(KIMI_HOME);
-        log(`🔄 Restoring from ${bk.path} (format: ${isNewFormat ? 'new' : 'old'})`);
+        // Detect format: old backups have `.kimi-code/` prefix paths
+        const firstPaths = tarList.trim().split('\n').slice(0, 5);
+        const hasDotKimiPrefix = firstPaths.some(p => p.startsWith('.kimi-code/'));
+        const extractDir = hasDotKimiPrefix ? path.dirname(KIMI_HOME) : KIMI_HOME;
+        log(`🔄 Restoring from ${bk.path} (format: ${hasDotKimiPrefix ? 'old (.kimi-code prefix)' : 'new'})`);
         execSync(`tar -xzf "${tempFile}" -C "${extractDir}" && rm -f "${tempFile}"`, { timeout: 30000 });
         log(`✅ Pentaract restore completed from ${bk.path}`);
         patchWorkspaceRoots();
