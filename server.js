@@ -122,8 +122,8 @@ function startKimi() {
     'localhost',
     '127.0.0.1:10001',
     '127.0.0.1',
-    '*.trycloudflare.com',
-    '*.onrender.com'
+    '.trycloudflare.com',
+    '.onrender.com'
   ].join(',');
   const kimiEnv = {
     ...process.env,
@@ -131,6 +131,8 @@ function startKimi() {
     KIMI_CODE_HOME: KIMI_HOME,
     KIMI_CODE_PASSWORD: FIXED_TOKEN,
     KIMI_CODE_ALLOWED_HOSTS: allowedHosts,
+    // Allow CORS origins for WebSocket through Cloudflare tunnel
+    KIMI_CODE_CORS_ORIGINS: 'https://kimicode.dpdns.org,https://kimi-code-server.onrender.com',
   };
 
   // Use `server run --foreground` — never daemonizes, process stays alive
