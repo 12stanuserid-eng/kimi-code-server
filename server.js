@@ -1010,7 +1010,8 @@ function startCloudflareTunnel() {
 
   // Start tunnel — point to our Node proxy (port 10000) which rewrites Host headers for WS
   // Use --protocol http2 for stable WebSocket connections (QUIC has UDP buffer issues on Render)
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--protocol', 'http2', '--no-autoupdate'];
+  // Use HTTP/1.1 (default) — HTTP/2 blocks WebSocket Upgrade mechanism
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'];
   log(`🚇 Starting Cloudflare Tunnel: ${cloudflaredPath} ${tunnelArgs.join(' ')}`);
 
   const proc = spawn(cloudflaredPath, tunnelArgs, {
