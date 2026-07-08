@@ -3,6 +3,18 @@ console.log('=== Kimi Code Setup ===');
 console.log('This setup runs during Render build to configure everything.');
 
 const fs = require('fs');
+
+// PRESERVE EXISTING CONFIG: if config.toml already has providers, don't overwrite
+const HOME_SETUP = process.env.HOME || '/root';
+const KIMI_DIR_SETUP = require('path').join(HOME_SETUP, '.kimi-code');
+const EXISTING_CONFIG = require('path').join(KIMI_DIR_SETUP, 'config.toml');
+try {
+  const existing = fs.readFileSync(EXISTING_CONFIG, 'utf8');
+  if (existing.includes('[providers.') && existing.trim().length > 100) {
+    console.log('[setup] config.toml already exists with providers — preserving (not overwriting)');
+    process.exit(0); // Skip config generation entirely
+  }
+} catch(e) { /* no existing config — proceed with generation */ }
 const path = require('path');
 const { execSync } = require('child_process');
 

@@ -311,7 +311,28 @@ function restoreFromLocalBackup(backupPath) {
     const extractDir = hasDotKimiPrefix ? path.dirname(KIMI_HOME) : KIMI_HOME;
     // Ensure KIMI_HOME exists
     fs.mkdirSync(KIMI_HOME, { recursive: true });
-    execSync(`tar -xzf "${backupPath}" -C "${extractDir}"`, { timeout: 30000 });
+    // Preserve existing config.toml if it has providers
+    const existingConfig = fs.existsSync(getConfigPath()) ? fs.readFileSync(getConfigPath(), 'utf8') : '';
+    const hasExistingProviders = existingConfig.includes('[providers.');
+    if (hasExistingProviders) {
+      const tmpExtract = '/tmp/kimi-local-restore-tmp';
+      fs.rmSync(tmpExtract, { recursive: true, force: true });
+      fs.mkdirSync(tmpExtract, { recursive: true });
+      execSync(`tar -xzf "${backupPath}" -C "${tmpExtract}"`, { timeout: 30000 });
+      const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : path.join(tmpExtract, KIMI_HOME);
+      if (fs.existsSync(extractedHome)) {
+        for (const item of fs.readdirSync(extractedHome)) {
+          if (item === 'config.toml') continue;
+          fs.cpSync(path.join(extractedHome, item), path.join(KIMI_HOME, item), { recursive: true });
+        }
+      }
+      fs.rmSync(tmpExtract, { recursive: true, force: true });
+    } else {
+      execSync(`tar -xzf "${backupPath}" -C "${extractDir}"`, { timeout: 30000 });
+    }
+    // Fix nested paths and homedir references
+    fixNestedSessionPaths(extractDir);
+    fixSessionHomedirPaths();
     log('✅ Local restore completed');
     patchWorkspaceRoots();
     return true;
@@ -460,11 +481,13 @@ function restoreFromPentaract() {
     if (listResult.trim().startsWith('<')) throw new Error('Cloudflare challenge on list');
     const data = JSON.parse(listResult);
     if (!data.files || data.files.length === 0) { log('ℹ️ No remote backups found'); return false; }
-    // Filter to only tar.gz files (skip speed tests, etc.)
+    // Filter to only tar.gz files (skip speed tests, etc.) — prefer small backups
     const backups = data.files.filter(f => f.path.endsWith('.tar.gz') && f.size > 2000);
     if (backups.length === 0) { log('ℹ️ No valid backup files found'); return false; }
-    // Sort by timestamp in filename (newest first)
+    // Sort by SIZE ascending (smallest first — fastest to download, most likely to succeed on free tier)
+    // Then by timestamp as tiebreaker (newest first)
     backups.sort((a, b) => {
+      if (Math.abs(a.size - b.size) > 50000) return a.size - b.size; // prefer smaller by >50KB
       const ta = a.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
       const tb = b.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
       if (ta && tb) return tb[1].localeCompare(ta[1]);
@@ -476,7 +499,7 @@ function restoreFromPentaract() {
     const tempFile = '/tmp/pentaract-restore.tar.gz';
     for (let i = 0; i < Math.min(backups.length, 20); i++) {
       const bk = backups[i];
-      log(`🔄 Trying backup ${i+1}/${Math.min(backups.length, 10)}: ${bk.path} (${bk.size} bytes)`);
+      log(`🔄 Trying backup ${i+1}/${Math.min(backups.length, 20)}: ${bk.path} (${(bk.size/1024).toFixed(1)}KB)`);
       try {
         execSync(`curl ${CURL_FLAGS} "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${bk.path}" \
           -H "Authorization: Bearer ${token}" -o "${tempFile}"`, { timeout: 120000 });
@@ -489,8 +512,39 @@ function restoreFromPentaract() {
         const firstPaths = tarList.trim().split('\n').slice(0, 5);
         const hasDotKimiPrefix = firstPaths.some(p => p.startsWith('.kimi-code/'));
         const extractDir = hasDotKimiPrefix ? path.dirname(KIMI_HOME) : KIMI_HOME;
-        log(`🔄 Restoring from ${bk.path} (format: ${hasDotKimiPrefix ? 'old (.kimi-code prefix)' : 'new'})`);
-        execSync(`tar -xzf "${tempFile}" -C "${extractDir}" && rm -f "${tempFile}"`, { timeout: 30000 });
+        log(`🔄 Restoring from ${bk.path} (format: ${hasDotKimiPrefix ? '.kimi-code prefix' : 'bare'})`);
+        // Preserve existing config.toml if it has providers (don't overwrite custom providers)
+        const existingConfig = fs.existsSync(getConfigPath()) ? fs.readFileSync(getConfigPath(), 'utf8') : '';
+        const hasExistingProviders = existingConfig.includes('[providers.');
+        if (hasExistingProviders) {
+          // Extract to temp dir, then manually copy sessions only (skip config.toml)
+          const tmpExtract = '/tmp/kimi-restore-tmp';
+          fs.rmSync(tmpExtract, { recursive: true, force: true });
+          fs.mkdirSync(tmpExtract, { recursive: true });
+          execSync(`tar -xzf "${tempFile}" -C "${tmpExtract}"`, { timeout: 30000 });
+          // Copy everything EXCEPT config.toml
+          const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : path.join(tmpExtract, KIMI_HOME);
+          if (fs.existsSync(extractedHome)) {
+            for (const item of fs.readdirSync(extractedHome)) {
+              if (item === 'config.toml') continue; // preserve existing
+              const src = path.join(extractedHome, item);
+              const dst = path.join(KIMI_HOME, item);
+              fs.cpSync(src, dst, { recursive: true });
+            }
+          }
+          fs.rmSync(tmpExtract, { recursive: true, force: true });
+          log('✅ Preserved existing config.toml (has providers)');
+        } else {
+          execSync(`tar -xzf "${tempFile}" -C "${extractDir}"`, { timeout: 30000 });
+        }
+        try { fs.unlinkSync(tempFile); } catch(e) {}
+
+        // Fix nested .kimi-code paths (old backups with sessions/root/.kimi-code/sessions/...)
+        fixNestedSessionPaths(extractDir);
+
+        // Fix homedir paths in state.json files to match current KIMI_HOME
+        fixSessionHomedirPaths();
+
         log(`✅ Pentaract restore completed from ${bk.path}`);
         patchWorkspaceRoots();
         return true;
@@ -503,6 +557,91 @@ function restoreFromPentaract() {
   } catch (err) {
     log(`❌ Pentaract restore failed: ${err.message}`);
     return false;
+  }
+}
+
+// Fix old backups where sessions are nested inside sessions/root/.kimi-code/sessions/
+function fixNestedSessionPaths(extractDir) {
+  try {
+    const nestedDir = path.join(KIMI_HOME, 'sessions', 'root', '.kimi-code', 'sessions');
+    if (!fs.existsSync(nestedDir)) return; // no nested paths — nothing to fix
+    log('🔧 Fixing nested session paths (old backup format)...');
+    const wsDirs = fs.readdirSync(nestedDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const ws of wsDirs) {
+      const targetWs = path.join(KIMI_HOME, 'sessions', ws.name);
+      fs.mkdirSync(targetWs, { recursive: true });
+      const srcWs = path.join(nestedDir, ws.name);
+      const sessions = fs.readdirSync(srcWs, { withFileTypes: true }).filter(d => d.isDirectory());
+      for (const sess of sessions) {
+        const targetSess = path.join(targetWs, sess.name);
+        if (!fs.existsSync(targetSess)) {
+          fs.cpSync(path.join(srcWs, sess.name), targetSess, { recursive: true });
+        }
+      }
+      log(`  Moved ${sessions.length} sessions from nested path → ${ws.name}`);
+    }
+    // Clean up nested dir
+    fs.rmSync(path.join(KIMI_HOME, 'sessions', 'root'), { recursive: true, force: true });
+    log('✅ Nested paths fixed');
+  } catch (err) {
+    log(`⚠️ fixNestedSessionPaths failed: ${err.message}`);
+  }
+}
+
+// Fix homedir paths in session state.json to match current KIMI_HOME
+function fixSessionHomedirPaths() {
+  try {
+    const sessionsDir = path.join(KIMI_HOME, 'sessions');
+    if (!fs.existsSync(sessionsDir)) return;
+    let fixed = 0;
+    const wsDirs = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const ws of wsDirs) {
+      const wsPath = path.join(sessionsDir, ws.name);
+      const sessDirs = fs.readdirSync(wsPath, { withFileTypes: true }).filter(d => d.isDirectory());
+      for (const sess of sessDirs) {
+        const stateFile = path.join(wsPath, sess.name, 'state.json');
+        if (!fs.existsSync(stateFile)) continue;
+        try {
+          const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+          let changed = false;
+          if (state.agents) {
+            for (const [aid, agent] of Object.entries(state.agents)) {
+              if (agent.homedir && !agent.homedir.startsWith(KIMI_HOME)) {
+                agent.homedir = agent.homedir.replace(/\/root\/\.kimi-code/g, KIMI_HOME);
+                changed = true;
+              }
+            }
+          }
+          if (changed) {
+            fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+            fixed++;
+          }
+        } catch(e) {}
+      }
+    }
+    if (fixed > 0) log(`✅ Fixed homedir paths in ${fixed} session state.json files`);
+    // Also fix session_index.jsonl
+    const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
+    if (fs.existsSync(indexPath)) {
+      const lines = fs.readFileSync(indexPath, 'utf8').split('\n').filter(Boolean);
+      let idxFixed = 0;
+      const newLines = lines.map(line => {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.sessionDir && !entry.sessionDir.startsWith(KIMI_HOME)) {
+            entry.sessionDir = entry.sessionDir.replace(/\/root\/\.kimi-code/g, KIMI_HOME);
+            idxFixed++;
+          }
+          return JSON.stringify(entry);
+        } catch(e) { return line; }
+      });
+      if (idxFixed > 0) {
+        fs.writeFileSync(indexPath, newLines.join('\n') + '\n');
+        log(`✅ Fixed ${idxFixed} session_index.jsonl paths`);
+      }
+    }
+  } catch (err) {
+    log(`⚠️ fixSessionHomedirPaths failed: ${err.message}`);
   }
 }
 
@@ -1547,23 +1686,14 @@ const server = http.createServer((req, res) => {
           });
           // Inject workspace IDs into localStorage so sessions appear in UI
           const wsScript = '<script>\n(function(){\n  var ids = ' + JSON.stringify(wsIds) + ';\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    ids.forEach(function(id){ if(o.indexOf(id)===-1) o.push(id); });\n    localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n  } catch(e){}\n})();\n</script>';
-          // WebSocket redirect — needed whenever Cloudflare is proxying (blocks WS upgrades)
-          // Detects Cloudflare via cf-ray header OR known Render Cloudflare domains
-          const reqHost = req.headers['host'] || '';
-          const cfRay = req.headers['cf-ray'] || null;
-          const cfVia = (req.headers['via'] || '').toLowerCase().includes('cloudflare');
-          const isCloudflare = cfRay !== null || cfVia;
-          const isOnRenderDomain = reqHost.endsWith('.onrender.com') || reqHost.includes('.onrender.com:');
+          // WebSocket redirect — always use tunnel when available for reliable WS connections
+          // Cloudflare (and some reverse proxies) block WS upgrades; tunnel bypasses this
+          const tunnelOrigin = (() => { try { return tunnelUrl ? new URL(tunnelUrl).origin : null; } catch(e) { return null; } })();
           let wsRedirect;
-          if ((isCloudflare || isOnRenderDomain) && tunnelUrl) {
-            // Cloudflare blocks WS — redirect through cloudflared tunnel
-            const tunnelOrigin = (() => { try { return new URL(tunnelUrl).origin; } catch(e) { return null; } })();
-            if (tunnelOrigin) {
-              wsRedirect = '<script>\n(function(){\n  var targetOrigin = ' + JSON.stringify(tunnelOrigin) + ';\n  var pageOrigin = window.location.origin;\n  var NativeWS = window.WebSocket;\n  window.WebSocket = function(url, protocols) {\n    if (typeof url === "string" && url.indexOf(pageOrigin + "/api/v1/ws") === 0) {\n      url = url.replace(pageOrigin, targetOrigin);\n    }\n    return new NativeWS(url, protocols);\n  };\n  window.WebSocket.prototype = NativeWS.prototype;\n  window.WebSocket.CONNECTING = 0;\n  window.WebSocket.OPEN = 1;\n  window.WebSocket.CLOSING = 2;\n  window.WebSocket.CLOSED = 3;\n})();\n</script>';
-            }
-          }
-          if (!wsRedirect) {
-            wsRedirect = '<!-- WS direct: tunnel not ready or no Cloudflare detected -->';
+          if (tunnelOrigin) {
+            wsRedirect = '<script>\n(function(){\n  var targetOrigin = ' + JSON.stringify(tunnelOrigin) + ';\n  var pageOrigin = window.location.origin;\n  if (targetOrigin === pageOrigin) return;\n  var NativeWS = window.WebSocket;\n  window.WebSocket = function(url, protocols) {\n    if (typeof url === "string" && (url.startsWith(pageOrigin + "/api/v1/ws") || url.startsWith("/api/v1/ws"))) {\n      var wsPath = url.includes("/api/v1/ws") ? url.substring(url.indexOf("/api/v1/ws")) : url;\n      url = targetOrigin + wsPath;\n    }\n    return new NativeWS(url, protocols);\n  };\n  window.WebSocket.prototype = NativeWS.prototype;\n  window.WebSocket.CONNECTING = 0;\n  window.WebSocket.OPEN = 1;\n  window.WebSocket.CLOSING = 2;\n  window.WebSocket.CLOSED = 3;\n})();\n</script>';
+          } else {
+            wsRedirect = '<!-- WS direct: tunnel not available -->';
           }
           const settingsPanelScript = '<link rel="stylesheet" href="/kimi-admin/panel.css"><script src="/kimi-admin/panel.js"></script>';
           const allScripts = wsScript + '\n' + wsRedirect + '\n' + settingsPanelScript;
