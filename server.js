@@ -195,7 +195,7 @@ function scheduleRestart() {
 
 // ====== PENTARACT BACKUP / RESTORE (v2 — local fallback + proper headers) ======
 
-const CURL_FLAGS = '-s --max-time 30 -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 KimiCodeBackup/1.0"';
+const CURL_FLAGS = '-s --max-time 60 -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 KimiCodeBackup/1.0"';
 const LOCAL_BACKUP_DIR = path.join(os.tmpdir(), 'kimi-backups');
 const LOCAL_BACKUP_MAX = 5;
 
@@ -226,8 +226,29 @@ function performLocalBackup() {
   const backupName = `kimi-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
   const tarFile = path.join(LOCAL_BACKUP_DIR, backupName);
   try {
-    const excludes = ['logs', 'cache', 'tmp', 'node_modules'].map(e => `--exclude='${KIMI_HOME}/${e}'`).join(' ');
-    execSync(`tar -czf "${tarFile}" ${excludes} -C "${path.dirname(KIMI_HOME)}" "${path.basename(KIMI_HOME)}" 2>/dev/null`, { timeout: 30000 });
+    // Only backup essential data: sessions + archived_sessions + config.toml + workspaces.json
+    // This keeps backup ~100MB instead of 697MB (no skills/, bin/, cache/, etc.)
+    const includes = [];
+    // Active sessions directory
+    const sessionsDir = path.join(KIMI_HOME, 'sessions');
+    if (fs.existsSync(sessionsDir)) includes.push('sessions');
+    // Archived sessions (old sessions that were archived)
+    const archivedDir = path.join(KIMI_HOME, 'archived_sessions');
+    if (fs.existsSync(archivedDir)) includes.push('archived_sessions');
+    // Config file
+    const configPath = path.join(KIMI_HOME, 'config.toml');
+    if (fs.existsSync(configPath)) includes.push('config.toml');
+    // Workspaces file
+    const wsPath = path.join(KIMI_HOME, 'workspaces.json');
+    if (fs.existsSync(wsPath)) includes.push('workspaces.json');
+
+    if (includes.length === 0) {
+      log('⚠️ Nothing to backup — no sessions, config, or workspaces found');
+      return null;
+    }
+
+    const includeArgs = includes.map(i => `"${i}"`).join(' ');
+    execSync(`tar -czf "${tarFile}" -C "${KIMI_HOME}" ${includeArgs} 2>/dev/null`, { timeout: 120000 });
     const stats = fs.statSync(tarFile);
     log(`✅ Local backup: ${backupName} (${(stats.size / 1024).toFixed(1)} KB)`);
     // Prune old local backups
@@ -263,7 +284,10 @@ function restoreFromLocalBackup(backupPath) {
   try {
     if (!fs.existsSync(backupPath)) throw new Error('Backup file not found');
     log(`🔄 Restoring from local: ${path.basename(backupPath)}`);
-    execSync(`tar -xzf "${backupPath}" -C "${path.dirname(KIMI_HOME)}"`, { timeout: 30000 });
+    // New backup format: files are relative to KIMI_HOME (sessions/, config.toml, workspaces.json)
+    // Ensure KIMI_HOME exists
+    fs.mkdirSync(KIMI_HOME, { recursive: true });
+    execSync(`tar -xzf "${backupPath}" -C "${KIMI_HOME}"`, { timeout: 30000 });
     log('✅ Local restore completed');
     patchWorkspaceRoots();
     return true;
@@ -297,7 +321,15 @@ function restoreFromPentaract() {
     if (listResult.trim().startsWith('<')) throw new Error('Cloudflare challenge on list');
     const data = JSON.parse(listResult);
     if (!data.files || data.files.length === 0) { log('ℹ️ No remote backups found'); return false; }
-    data.files.sort((a, b) => b.path.localeCompare(a.path));
+    // Sort by timestamp in filename (newest first) — extract ISO timestamps from filenames
+    data.files.sort((a, b) => {
+      const ta = a.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
+      const tb = b.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
+      if (ta && tb) return tb[1].localeCompare(ta[1]); // newest first
+      if (ta) return -1; // timestamped files first
+      if (tb) return 1;
+      return b.path.localeCompare(a.path); // fallback: newest name first
+    });
     const latest = data.files[0];
     log(`🔄 Downloading from Pentaract: ${latest.path}`);
     const tempFile = '/tmp/pentaract-restore.tar.gz';
@@ -306,7 +338,12 @@ function restoreFromPentaract() {
     // Validate tar.gz magic bytes
     const buf = fs.readFileSync(tempFile);
     if (buf[0] !== 0x1f || buf[1] !== 0x8b) throw new Error('Downloaded file is not valid tar.gz');
-    execSync(`tar -xzf "${tempFile}" -C "${path.dirname(KIMI_HOME)}" && rm -f "${tempFile}"`, { timeout: 30000 });
+    // Detect backup format: new (files at root) vs old (files under .kimi-code/)
+    const tarList = execSync(`tar -tzf "${tempFile}" 2>/dev/null`, { encoding: 'utf8' });
+    const isNewFormat = tarList.includes('sessions/') || tarList.includes('config.toml');
+    const extractDir = isNewFormat ? KIMI_HOME : path.dirname(KIMI_HOME);
+    log(`🔄 Backup format: ${isNewFormat ? 'new (direct)' : 'old (nested .kimi-code/)'}, extracting to: ${extractDir}`);
+    execSync(`tar -xzf "${tempFile}" -C "${extractDir}" && rm -f "${tempFile}"`, { timeout: 30000 });
     log('✅ Pentaract restore completed');
     patchWorkspaceRoots();
     return true;
