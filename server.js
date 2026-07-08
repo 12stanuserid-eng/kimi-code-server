@@ -319,12 +319,17 @@ function restoreFromLocalBackup(backupPath) {
       fs.rmSync(tmpExtract, { recursive: true, force: true });
       fs.mkdirSync(tmpExtract, { recursive: true });
       execSync(`tar -xzf "${backupPath}" -C "${tmpExtract}"`, { timeout: 30000 });
-      const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : path.join(tmpExtract, KIMI_HOME);
+      const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : tmpExtract;
       if (fs.existsSync(extractedHome)) {
         for (const item of fs.readdirSync(extractedHome)) {
           if (item === 'config.toml') continue;
-          fs.cpSync(path.join(extractedHome, item), path.join(KIMI_HOME, item), { recursive: true });
+          const src = path.join(extractedHome, item);
+          const dst = path.join(KIMI_HOME, item);
+          fs.cpSync(src, dst, { recursive: true });
+          log(`  Restored: ${item}`);
         }
+      } else {
+        log(`⚠️ Extracted home not found: ${extractedHome}`);
       }
       fs.rmSync(tmpExtract, { recursive: true, force: true });
     } else {
@@ -523,14 +528,17 @@ function restoreFromPentaract() {
           fs.mkdirSync(tmpExtract, { recursive: true });
           execSync(`tar -xzf "${tempFile}" -C "${tmpExtract}"`, { timeout: 30000 });
           // Copy everything EXCEPT config.toml
-          const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : path.join(tmpExtract, KIMI_HOME);
+          const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : tmpExtract;
           if (fs.existsSync(extractedHome)) {
             for (const item of fs.readdirSync(extractedHome)) {
               if (item === 'config.toml') continue; // preserve existing
               const src = path.join(extractedHome, item);
               const dst = path.join(KIMI_HOME, item);
               fs.cpSync(src, dst, { recursive: true });
+              log(`  Restored: ${item}`);
             }
+          } else {
+            log(`⚠️ Extracted home not found: ${extractedHome}`);
           }
           fs.rmSync(tmpExtract, { recursive: true, force: true });
           log('✅ Preserved existing config.toml (has providers)');
@@ -809,13 +817,19 @@ function checkAndRestore() {
     log('🔄 Sessions missing — attempting restore...');
     // Try local first
     const localBackup = getLatestLocalBackup();
-    if (localBackup) {
-      log(`📦 Found local backup: ${localBackup.name}`);
-      if (restoreFromLocalBackup(localBackup.file)) return true;
+    if (localBackup && localBackup.size >= 5000) {
+      log(`📦 Found local backup: ${localBackup.name} (${(localBackup.size/1024).toFixed(1)}KB)`);
+      if (restoreFromLocalBackup(localBackup.file)) {
+        log('🔄 Restarting daemon after local restore...');
+        restartKimiDaemon();
+        return true;
+      }
     }
     // Fall back to Pentaract
     if (restoreFromPentaract()) {
       try { performLocalBackup(); } catch (e) {}
+      log('🔄 Restarting daemon after Pentaract restore...');
+      restartKimiDaemon();
       return true;
     }
     log('⚠️ No backup source available — starting fresh');
