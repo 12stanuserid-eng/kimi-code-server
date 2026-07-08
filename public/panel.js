@@ -10,6 +10,7 @@
   var backSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
   var cogSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
   var plusSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+  var refreshSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>';
 
   // ====== MARK INJECTED ======
   var mark = document.createElement('meta');
@@ -274,13 +275,18 @@
         var keyStatus = p.has_api_key
           ? '<span style="color:var(--color-success,#3fb950);">● Key set</span>' + (p.api_key_masked ? ' <span style="opacity:0.5;">(' + escHtml(p.api_key_masked) + ')</span>' : '')
           : '<span style="color:var(--color-danger,#f85149);">● No key</span>';
+        var modelCount = p.model_count || 0;
+        var modelBadge = modelCount > 0
+          ? '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:500;background:rgba(88,166,255,0.1);color:var(--color-accent,#58a6ff);border:1px solid rgba(88,166,255,0.2);">' + modelCount + ' model' + (modelCount !== 1 ? 's' : '') + '</span>'
+          : '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:500;background:rgba(248,81,73,0.08);color:var(--color-danger,#f85149);border:1px solid rgba(248,81,73,0.15);">No models</span>';
         return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,8px);background:var(--color-surface-raised,#161b22);transition:border-color 0.15s;" onmouseenter="this.style.borderColor=\'var(--color-accent,#58a6ff)\'" onmouseleave="this.style.borderColor=\'var(--color-line,#2d333b)\'">' +
           '<div style="flex:1;min-width:0;">' +
-            '<div style="font-size:14px;font-weight:600;color:var(--color-text,#c9cdd4);margin-bottom:3px;">' + escHtml(p.id) + '</div>' +
+            '<div style="font-size:14px;font-weight:600;color:var(--color-text,#c9cdd4);margin-bottom:3px;display:flex;align-items:center;gap:8px;">' + escHtml(p.id) + modelBadge + '</div>' +
             '<div style="font-size:12px;color:var(--color-text-faint,#6b7280);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:3px;">' + escHtml(p.base_url) + '</div>' +
             '<div style="font-size:12px;">' + keyStatus + '</div>' +
           '</div>' +
           '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+            '<button onclick="ksRec(\'' + p.id.replace(/'/g, "\\'") + '\')" title="Rediscover models" style="padding:5px 10px;border:none;border-radius:var(--radius-sm,6px);font-size:12px;font-weight:500;cursor:pointer;background:rgba(63,185,80,0.12);color:var(--color-success,#3fb950);transition:all 0.15s;font-family:inherit;display:flex;align-items:center;gap:4px;" onmouseenter="this.style.background=\'rgba(63,185,80,0.22)\'" onmouseleave="this.style.background=\'rgba(63,185,80,0.12)\'">' + refreshSvg + ' Rediscover</button>' +
             '<button onclick="ksE(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:5px 10px;border:none;border-radius:var(--radius-sm,6px);font-size:12px;font-weight:500;cursor:pointer;background:rgba(88,166,255,0.15);color:var(--color-accent,#58a6ff);transition:all 0.15s;font-family:inherit;" onmouseenter="this.style.background=\'rgba(88,166,255,0.25)\'" onmouseleave="this.style.background=\'rgba(88,166,255,0.15)\'">Edit</button>' +
             delBtn +
           '</div>' +
@@ -352,6 +358,26 @@
       .then(function(d) {
         if (d.success) { ksSt('Deleted!', 'ks-ok'); ksRef(); }
         else { ksSt('Error: ' + (d.error || '?'), 'ks-bad'); }
+      })
+      .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
+  };
+
+  // ====== REDISCOVER MODELS ======
+  window.ksRec = function(id) {
+    ksSt('Rediscovering models for "' + id + '"... This may take up to 30s.', 'ks-wait');
+    fetch('/kimi-admin/providers/' + encodeURIComponent(id) + '/rediscover', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          if (d.models_discovered > 0) {
+            ksSt('Rediscovered ' + d.models_discovered + ' models for "' + id + '". Restart daemon to use them.', 'ks-ok');
+          } else {
+            ksSt(d.message || 'No models found. Check API key and base URL.', 'ks-bad');
+          }
+          ksRef();
+        } else {
+          ksSt('Error: ' + (d.error || 'Unknown error'), 'ks-bad');
+        }
       })
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
   };

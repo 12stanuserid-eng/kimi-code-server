@@ -520,8 +520,8 @@ function fetchModels(baseUrl, apiKey) {
     const httpx = url.startsWith('https') ? https : http;
     log(`🔍 Fetching models from ${url}`);
 
-    // Timeout — fail fast after 15s
-    const TIMEOUT_MS = 15000;
+    // Timeout — 30s for large providers like NVIDIA
+    const TIMEOUT_MS = 30000;
 
     const options = {
       headers: {},
@@ -794,13 +794,26 @@ const server = http.createServer((req, res) => {
   if (req.url === '/kimi-admin/providers' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type': 'application/json'});
     const providers = readProvidersFromConfig();
-    const list = Object.values(providers).map(p => ({
-      id: p.id,
-      type: p.type,
-      base_url: p.baseUrl,
-      has_api_key: !!p.apiKey && p.apiKey !== 'no-auth-required',
-      api_key_masked: maskKey(p.apiKey)
-    }));
+    // Count models per provider
+    let configRaw = '';
+    try { configRaw = fs.readFileSync(getConfigPath(), 'utf8'); } catch(e) {}
+    const list = Object.values(providers).map(p => {
+      // Count models that reference this provider
+      const nameRegex = new RegExp(`\\[models\\."?${escapeRegex(p.id)}-`, 'g');
+      const refRegex = new RegExp(`provider\\s*=\\s*"${escapeRegex(p.id)}"`, 'g');
+      let modelCount = 0;
+      let m;
+      while ((m = nameRegex.exec(configRaw)) !== null) modelCount++;
+      while ((m = refRegex.exec(configRaw)) !== null) modelCount++;
+      return {
+        id: p.id,
+        type: p.type,
+        base_url: p.baseUrl,
+        has_api_key: !!p.apiKey && p.apiKey !== 'no-auth-required',
+        api_key_masked: maskKey(p.apiKey),
+        model_count: modelCount
+      };
+    });
     return res.end(JSON.stringify({ success: true, providers: list }));
   }
 
@@ -817,14 +830,18 @@ const server = http.createServer((req, res) => {
             return res.end(JSON.stringify({ success: false, error: 'id and base_url are required' }));
           }
 
-          // Step 1: Fetch models from provider to validate API key and discover models
+          // Step 1: Fetch models from provider (with retry)
           let models = [];
           let fetchError = null;
-          try {
-            models = await fetchModels(data.base_url, data.api_key || '');
-          } catch (e) {
-            fetchError = e.message;
-            // Even if model fetch fails, still save the provider (user can manually configure)
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              models = await fetchModels(data.base_url, data.api_key || '');
+              if (models.length > 0) break; // success
+            } catch (e) {
+              fetchError = e.message;
+              log(`⚠️ Model discovery attempt ${attempt}/3 failed for "${data.id}": ${e.message}`);
+              if (attempt < 3) await new Promise(r => setTimeout(r, 2000)); // wait 2s before retry
+            }
           }
 
           // Step 2: Write provider to config
@@ -868,6 +885,82 @@ const server = http.createServer((req, res) => {
     log(`🔧 Admin API: provider "${providerId}" removed`);
     res.writeHead(200, {'Content-Type': 'application/json'});
     return res.end(JSON.stringify({ success: true, message: `Provider "${providerId}" removed. Restart daemon to apply.` }));
+  }
+
+  // POST /kimi-admin/providers/:id/rediscover — re-discover models for an existing provider
+  const rediscoverMatch = req.url.match(/^\/kimi-admin\/providers\/(.+)\/rediscover$/);
+  if (rediscoverMatch && req.method === 'POST') {
+    const providerId = decodeURIComponent(rediscoverMatch[1]);
+    const providers = readProvidersFromConfig();
+    const provider = providers[providerId];
+    if (!provider) {
+      res.writeHead(404, {'Content-Type': 'application/json'});
+      return res.end(JSON.stringify({ success: false, error: `Provider "${providerId}" not found` }));
+    }
+    (async () => {
+      try {
+        log(`🔍 Rediscovering models for "${providerId}" from ${provider.baseUrl}`);
+        let models = [];
+        let fetchError = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            models = await fetchModels(provider.baseUrl, provider.apiKey || '');
+            if (models.length > 0) break;
+          } catch (e) {
+            fetchError = e.message;
+            log(`⚠️ Rediscover attempt ${attempt}/3 failed for "${providerId}": ${e.message}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+        if (models.length > 0) {
+          writeModelsForProvider(getConfigPath(), providerId, models);
+        }
+        log(`🔧 Rediscover: "${providerId}" — ${models.length} models found`);
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.end(JSON.stringify({
+          success: true,
+          provider_id: providerId,
+          models_discovered: models.length,
+          error: fetchError && models.length === 0 ? fetchError : null,
+          message: models.length > 0
+            ? `Rediscovered ${models.length} models for "${providerId}". Restart daemon to apply.`
+            : fetchError
+              ? `Model discovery failed: ${fetchError}`
+              : `No models found for "${providerId}".`
+        }));
+      } catch (e) {
+        res.writeHead(500, {'Content-Type': 'application/json'});
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    })();
+    return;
+  }
+
+  // GET /kimi-admin/providers/:id/models — list models for a specific provider
+  const providerModelsMatch = req.url.match(/^\/kimi-admin\/providers\/(.+)\/models$/);
+  if (providerModelsMatch && req.method === 'GET') {
+    const providerId = decodeURIComponent(providerModelsMatch[1]);
+    try {
+      const configPath = getConfigPath();
+      const raw = fs.readFileSync(configPath, 'utf8');
+      const models = [];
+      // Find all [models."<providerId>-..."] sections
+      const regex = new RegExp(`\\[models\\."?${escapeRegex(providerId)}-([^\\]"]+)["\\]]`, 'g');
+      let m;
+      while ((m = regex.exec(raw)) !== null) {
+        models.push(m[1]);
+      }
+      // Also find models with provider = "<providerId>" line
+      const refRegex = new RegExp(`\\[models\\.([^\\]]+)\\]\\n\\s*provider\\s*=\\s*"${escapeRegex(providerId)}"`, 'g');
+      while ((m = refRegex.exec(raw)) !== null) {
+        if (!models.includes(m[1])) models.push(m[1]);
+      }
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      return res.end(JSON.stringify({ success: true, provider_id: providerId, models, count: models.length }));
+    } catch (e) {
+      res.writeHead(500, {'Content-Type': 'application/json'});
+      return res.end(JSON.stringify({ success: false, error: e.message }));
+    }
   }
 
   // POST /kimi-admin/restart-daemon — restart the kimi daemon
