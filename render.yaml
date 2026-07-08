@@ -4,7 +4,7 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: npm install && node setup.js
+    buildCommand: apt-get update -qq && apt-get install -y -qq pigz zstd > /dev/null 2>&1; npm install && node setup.js
     startCommand: node server.js
     healthCheckPath: /health
     envVars:

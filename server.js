@@ -199,6 +199,24 @@ const CURL_FLAGS = '-s --max-time 60 -H "User-Agent: Mozilla/5.0 (X11; Linux x86
 const LOCAL_BACKUP_DIR = path.join(os.tmpdir(), 'kimi-backups');
 const LOCAL_BACKUP_MAX = 5;
 
+// ====== FAST COMPRESSION DETECTION (pigz > gzip) ======
+// pigz = parallel gzip, uses all CPU cores, ~3x faster than single-thread gzip
+// Output is gzip-compatible (same magic bytes), so restore works without changes
+let _cachedCompressor = null;
+function getBestCompressor() {
+  if (_cachedCompressor) return _cachedCompressor;
+  // Try pigz first (parallel gzip — uses all CPU cores, ~3x faster)
+  try { execSync('which pigz', { stdio: 'ignore' }); _cachedCompressor = 'pigz'; log('🚀 Using pigz (parallel gzip — fast)'); return _cachedCompressor; } catch(e) {}
+  // Fallback to gzip
+  _cachedCompressor = 'gzip'; log('📦 Using gzip (default — slower)'); return _cachedCompressor;
+}
+// Returns tar --use-compress-program arg for spawning (no shell, direct args)
+function getTarCompressArgs() {
+  const c = getBestCompressor();
+  if (c === 'pigz') return '--use-compress-program=pigz -1';
+  return '--use-compress-program=gzip -1';
+}
+
 function pentaractLogin() {
   try {
     const result = execSync(`curl ${CURL_FLAGS} -X POST "${PENTARACT_URL}/api/auth/login" \
@@ -248,7 +266,9 @@ function performLocalBackup() {
     }
 
     const includeArgs = includes.map(i => `"${i}"`).join(' ');
-    execSync(`tar -czf "${tarFile}" -C "${KIMI_HOME}" ${includeArgs} 2>/dev/null`, { timeout: 120000 });
+    const compressFlag = getTarCompressArgs();
+    // Quote the compress flag for shell (it contains spaces like "gzip -1")
+    execSync(`tar "${compressFlag}" -cf "${tarFile}" -C "${KIMI_HOME}" ${includeArgs} 2>/dev/null`, { timeout: 120000 });
     const stats = fs.statSync(tarFile);
     log(`✅ Local backup: ${backupName} (${(stats.size / 1024).toFixed(1)} KB)`);
     // Prune old local backups
@@ -297,20 +317,135 @@ function restoreFromLocalBackup(backupPath) {
   }
 }
 
-// ====== PENTARACT REMOTE ======
+// ====== PENTARACT REMOTE (STREAMING — no temp file, no curl, zero deps) ======
 
-function performRemoteBackup(localTarFile) {
+function performRemoteBackupStreaming(token, includes) {
+  return new Promise((resolve, reject) => {
+    if (!includes || includes.length === 0) {
+      return reject(new Error('No includes to backup'));
+    }
+
+    const boundary = '----KimiBackup' + crypto.randomBytes(16).toString('hex');
+    const backupName = `kimi-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
+
+    // Build the non-file parts of the multipart body (known size)
+    const pathField = `--${boundary}\r\nContent-Disposition: form-data; name="path"\r\n\r\n/backups/\r\n`;
+    const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${backupName}"\r\nContent-Type: application/gzip\r\n\r\n`;
+    const ending = `\r\n--${boundary}--\r\n`;
+
+    // Spawn tar — use best available compressor (pigz/zstd/gzip)
+    // Note: spawn passes args directly (no shell), so NO quotes around filenames
+    const compressArg = getTarCompressArgs();
+    const tarProc = spawn('tar', [
+      compressArg,
+      '-cf', '-', '-C', KIMI_HOME, ...includes
+    ]);
+
+    const tarStartMs = Date.now();
+
+    tarProc.on('error', (err) => {
+      log(`❌ tar spawn error: ${err.message}`);
+      reject(err);
+    });
+
+    // HTTPS request with chunked transfer (no Content-Length needed for streaming)
+    const parsedUrl = new URL(PENTARACT_URL);
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: 443,
+      path: `/api/files/${BACKUP_STORAGE_ID}/upload`,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Transfer-Encoding': 'chunked',
+        'User-Agent': 'KimiCodeBackup/2.0',
+      },
+      timeout: 60000,
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        const elapsedMs = Date.now() - tarStartMs;
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          log(`✅ Streaming upload done in ${elapsedMs}ms (${res.statusCode})`);
+          resolve(true);
+        } else {
+          log(`⚠️ Streaming upload failed: HTTP ${res.statusCode} in ${elapsedMs}ms — ${data.substring(0, 300)}`);
+          reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      log(`❌ Streaming upload error: ${err.message}`);
+      reject(err);
+    });
+
+    req.on('timeout', () => {
+      log('❌ Streaming upload timed out (60s)');
+      req.destroy();
+      tarProc.kill('SIGTERM');
+      reject(new Error('Upload timed out'));
+    });
+
+    // Write pre-file multipart fields
+    req.write(pathField);
+    req.write(fileHeader);
+
+    // Pipe tar stdout directly into the HTTPS request body
+    tarProc.stdout.pipe(req, { end: false });
+
+    let tarFailed = false;
+
+    // When tar process finishes, write the ending boundary and close the request
+    tarProc.on('close', (code) => {
+      if (tarFailed) return;
+      if (code !== 0) {
+        log(`❌ tar exited with code ${code}`);
+        req.destroy();
+        reject(new Error(`tar failed with code ${code}`));
+        return;
+      }
+      // Write closing boundary — this signals end of multipart body
+      req.write(ending);
+      req.end();
+    });
+
+    tarProc.stderr.on('data', (d) => {
+      const msg = d.toString().trim();
+      if (msg && !msg.includes('tar:')) log(`[tar] ${msg.substring(0, 200)}`);
+    });
+
+    // Safety: if tar errors before stdout closes
+    tarProc.on('error', (err) => {
+      tarFailed = true;
+      log(`❌ tar error: ${err.message}`);
+      req.destroy();
+      reject(err);
+    });
+  });
+}
+
+// Legacy fallback — uses curl (slower but reliable)
+function performRemoteBackupCurl(localTarFile) {
   try {
     const token = pentaractLogin();
     execSync(`curl ${CURL_FLAGS} -X POST "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/upload" \
       -H "Authorization: Bearer ${token}" \
       -F "file=@${localTarFile}" -F "path=/backups/"`, { timeout: 60000, encoding: 'utf8' });
-    log(`✅ Pentaract remote backup uploaded`);
+    log(`✅ Pentaract remote backup uploaded (curl fallback)`);
     return true;
   } catch (err) {
-    log(`⚠️ Pentaract remote failed: ${err.message} (local backup still safe)`);
+    log(`⚠️ Pentaract remote failed: ${err.message}`);
     return false;
   }
+}
+
+function performRemoteBackup(localTarFile) {
+  return performRemoteBackupCurl(localTarFile);
 }
 
 function restoreFromPentaract() {
@@ -358,24 +493,59 @@ function restoreFromPentaract() {
 function performBackup() {
   if (backupInProgress) { log('⚠️ Backup already in progress, skipping'); return false; }
   backupInProgress = true;
-  try {
-    const localResult = performLocalBackup();
-    if (!localResult) { lastBackupStatus = 'failed: local backup failed'; return false; }
-    let remoteOk = false;
-    try { remoteOk = performRemoteBackup(localResult.file); } catch (e) {}
-    lastBackupTime = new Date().toISOString();
-    lastBackupSize = localResult.size;
-    lastBackupStatus = remoteOk ? 'success (local + remote)' : 'success (local only)';
+  (async () => {
+    try {
+      // Compute what to backup (same logic as performLocalBackup)
+      const includes = [];
+      const sessionsDir = path.join(KIMI_HOME, 'sessions');
+      if (fs.existsSync(sessionsDir)) includes.push('sessions');
+      const archivedDir = path.join(KIMI_HOME, 'archived_sessions');
+      if (fs.existsSync(archivedDir)) includes.push('archived_sessions');
+      const configPath = path.join(KIMI_HOME, 'config.toml');
+      if (fs.existsSync(configPath)) includes.push('config.toml');
+      const wsPath = path.join(KIMI_HOME, 'workspaces.json');
+      if (fs.existsSync(wsPath)) includes.push('workspaces.json');
 
-    // Sync check — if remote failed, retry next cycle; if local missing, pull from remote
-    if (!remoteOk) {
-      log('🔄 Sync: remote backup pending, will retry next cycle');
-    }
-    return true;
-  } catch (err) {
-    lastBackupStatus = `failed: ${err.message}`;
-    return false;
-  } finally { backupInProgress = false; }
+      if (includes.length === 0) {
+        log('⚠️ Nothing to backup');
+        lastBackupStatus = 'nothing to backup';
+        return;
+      }
+
+      // Strategy 1: Streaming upload (fastest — no temp file, no curl)
+      let remoteOk = false;
+      let localResult = null;
+      try {
+        const token = pentaractLogin();
+        log('🚀 Starting streaming upload...');
+        const streamStart = Date.now();
+        remoteOk = await performRemoteBackupStreaming(token, includes);
+        const streamMs = Date.now() - streamStart;
+        log(`🚀 Streaming upload completed in ${streamMs}ms`);
+        // Still create local backup as safety net (async, non-blocking)
+        localResult = performLocalBackup();
+      } catch (streamErr) {
+        log(`⚠️ Streaming upload failed: ${streamErr.message} — trying curl fallback`);
+        // Strategy 2: Local backup + curl upload (fallback)
+        localResult = performLocalBackup();
+        if (localResult) {
+          try { remoteOk = performRemoteBackupCurl(localResult.file); } catch (e) {}
+        }
+      }
+
+      if (!localResult) localResult = getLatestLocalBackup(); // may have been created earlier
+      lastBackupTime = new Date().toISOString();
+      lastBackupSize = localResult ? localResult.size : 0;
+      lastBackupStatus = remoteOk ? 'success (local + remote)' : 'success (local only)';
+
+      if (!remoteOk) {
+        log('🔄 Sync: remote backup pending, will retry next cycle');
+      }
+    } catch (err) {
+      lastBackupStatus = `failed: ${err.message}`;
+    } finally { backupInProgress = false; }
+  })();
+  return true; // async — returns immediately
 }
 
 // ====== SYNC: verify both local + Pentaract have data ======
