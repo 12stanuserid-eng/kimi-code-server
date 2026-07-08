@@ -340,6 +340,7 @@ function restoreFromLocalBackup(backupPath) {
     fixSessionHomedirPaths();
     log('✅ Local restore completed');
     patchWorkspaceRoots();
+    regenerateSessionIndex();
     return true;
   } catch (err) {
     log(`❌ Local restore failed: ${err.message}`);
@@ -486,20 +487,12 @@ function restoreFromPentaract() {
     if (listResult.trim().startsWith('<')) throw new Error('Cloudflare challenge on list');
     const data = JSON.parse(listResult);
     if (!data.files || data.files.length === 0) { log('ℹ️ No remote backups found'); return false; }
-    // Filter to only tar.gz files (skip speed tests, etc.) — prefer small backups
-    const backups = data.files.filter(f => f.path.endsWith('.tar.gz') && f.size > 2000);
+    // Filter to only tar.gz files — skip tiny (< 3KB = config-only) and huge (> 5MB = OOM risk on free tier)
+    const backups = data.files.filter(f => f.path.endsWith('.tar.gz') && f.size > 3000 && f.size < 5000000);
     if (backups.length === 0) { log('ℹ️ No valid backup files found'); return false; }
-    // Sort by SIZE ascending (smallest first — fastest to download, most likely to succeed on free tier)
-    // Then by timestamp as tiebreaker (newest first)
-    backups.sort((a, b) => {
-      if (Math.abs(a.size - b.size) > 50000) return a.size - b.size; // prefer smaller by >50KB
-      const ta = a.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
-      const tb = b.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
-      if (ta && tb) return tb[1].localeCompare(ta[1]);
-      if (ta) return -1;
-      if (tb) return 1;
-      return b.path.localeCompare(a.path);
-    });
+    // Sort by SIZE DESCENDING (largest first — most sessions, most complete backup)
+    // This ensures we pick the clean/full backup (52KB) over partial ones (24KB)
+    backups.sort((a, b) => b.size - a.size);
     // Try each backup until one works (some may be deleted from Telegram)
     const tempFile = '/tmp/pentaract-restore.tar.gz';
     for (let i = 0; i < Math.min(backups.length, 20); i++) {
@@ -555,6 +548,7 @@ function restoreFromPentaract() {
 
         log(`✅ Pentaract restore completed from ${bk.path}`);
         patchWorkspaceRoots();
+        regenerateSessionIndex();
         return true;
       } catch (err) {
         log(`⚠️ Failed to restore from ${bk.path}: ${err.message}`);
@@ -650,6 +644,52 @@ function fixSessionHomedirPaths() {
     }
   } catch (err) {
     log(`⚠️ fixSessionHomedirPaths failed: ${err.message}`);
+  }
+}
+
+// ====== REGENERATE SESSION INDEX ======
+// The daemon uses session_index.jsonl to list sessions via the API.
+// If it's missing or empty after a restore, the API returns 0 sessions.
+// This function rebuilds it from the sessions directory on disk.
+function regenerateSessionIndex() {
+  try {
+    const sessionsDir = path.join(KIMI_HOME, 'sessions');
+    const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
+    if (!fs.existsSync(sessionsDir)) {
+      log('⚠️ regenerateSessionIndex: sessions dir not found');
+      return;
+    }
+    const entries = [];
+    const wsDirs = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const ws of wsDirs) {
+      const wsPath = path.join(sessionsDir, ws.name);
+      const sessDirs = fs.readdirSync(wsPath, { withFileTypes: true }).filter(d => d.isDirectory());
+      for (const sess of sessDirs) {
+        const stateFile = path.join(wsPath, sess.name, 'state.json');
+        if (!fs.existsSync(stateFile)) continue;
+        try {
+          const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+          entries.push({
+            sessionId: sess.name,
+            workspaceId: ws.name,
+            sessionDir: path.join(wsPath, sess.name),
+            createdAt: state.createdAt || state.created_at || new Date().toISOString(),
+            title: state.title || state.name || sess.name,
+          });
+        } catch(e) {
+          // If state.json is invalid, still add a basic entry
+          entries.push({
+            sessionId: sess.name,
+            workspaceId: ws.name,
+            sessionDir: path.join(wsPath, sess.name),
+          });
+        }
+      }
+    }
+    fs.writeFileSync(indexPath, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+    log(`✅ Regenerated session_index.jsonl with ${entries.length} sessions`);
+  } catch (err) {
+    log(`⚠️ regenerateSessionIndex failed: ${err.message}`);
   }
 }
 
@@ -1599,11 +1639,17 @@ const server = http.createServer((req, res) => {
       }
     }
 
+    // After restore, always regenerate session index and restart daemon
+    if (restored) {
+      try { regenerateSessionIndex(); } catch(e) {}
+      try { restartKimiDaemon(); } catch(e) {}
+    }
+
     res.writeHead(200, {'Content-Type': 'application/json'});
     res.end(JSON.stringify({
       success: restored,
       message: restored
-        ? 'Restore completed. Restart daemon to apply.'
+        ? 'Restore completed. Daemon restarting.'
         : 'No backup found or restore failed',
       source_used: source === 'pentaract' ? 'pentaract' : (source === 'local' ? 'local' : (localBk && localBk.size >= 5000 ? 'local' : 'pentaract')),
       local_backup: localBk ? localBk.name : null
