@@ -200,6 +200,29 @@
     }, 2000);
   })();
 
+  // ====== AUTO-RESTART DAEMON (silent, no confirm) ======
+  window.ksAutoRestart = function(delayMs) {
+    var wait = delayMs || 3000;
+    ksSt('Restarting daemon to apply changes...', 'ks-wait');
+    fetch('/kimi-admin/restart-daemon', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          ksSt('Daemon restarting! Reloading in ' + Math.round(wait/1000) + 's...', 'ks-ok');
+          setTimeout(function() { location.reload(); }, wait);
+        } else {
+          // Daemon not running — page may need manual reload
+          ksSt('Daemon not running. Reloading page...', 'ks-ok');
+          setTimeout(function() { location.reload(); }, 2000);
+        }
+      })
+      .catch(function() {
+        // Network error — still reload after delay (daemon may be restarting)
+        ksSt('Restart request sent. Reloading page...', 'ks-ok');
+        setTimeout(function() { location.reload(); }, 4000);
+      });
+  };
+
   // ====== BACK BUTTON ======
   window.ksBack = function() {
     if (page) page.style.display = 'none';
@@ -335,13 +358,10 @@
       body: body
     }).then(function(r) { return r.json(); }).then(function(d) {
       if (d.success) {
-        var msg = d.message || 'Saved! Restart daemon to apply.';
-        if (d.models_discovered > 0) {
-          msg = d.models_discovered + ' models discovered for "' + id + '". Restart daemon to use them.';
-        }
-        ksSt(msg, 'ks-ok');
         ksRef();
         ksCf();
+        // Auto-restart daemon so models appear in selector immediately
+        ksAutoRestart(5000);
       } else {
         ksSt('Error: ' + (d.error || 'Unknown error'), 'ks-bad');
       }
@@ -356,7 +376,11 @@
     fetch('/kimi-admin/providers/' + encodeURIComponent(id), { method: 'DELETE' })
       .then(function(r) { return r.json(); })
       .then(function(d) {
-        if (d.success) { ksSt('Deleted!', 'ks-ok'); ksRef(); }
+        if (d.success) {
+          ksRef();
+          // Auto-restart daemon so deleted provider disappears from selector
+          ksAutoRestart(4000);
+        }
         else { ksSt('Error: ' + (d.error || '?'), 'ks-bad'); }
       })
       .catch(function(e) { ksSt('Error: ' + e.message, 'ks-bad'); });
@@ -369,12 +393,13 @@
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d.success) {
+          ksRef();
           if (d.models_discovered > 0) {
-            ksSt('Rediscovered ' + d.models_discovered + ' models for "' + id + '". Restart daemon to use them.', 'ks-ok');
+            // Auto-restart daemon so new models appear in selector
+            ksAutoRestart(5000);
           } else {
             ksSt(d.message || 'No models found. Check API key and base URL.', 'ks-bad');
           }
-          ksRef();
         } else {
           ksSt('Error: ' + (d.error || 'Unknown error'), 'ks-bad');
         }
