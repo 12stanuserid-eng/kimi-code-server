@@ -27,30 +27,30 @@
           '<button onclick="ksC()" aria-label="Close" style="background:none;border:none;color:var(--color-text-faint,#6b7280);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:var(--radius-md,6px);line-height:1;transition:color 0.15s,background 0.15s;" onmouseenter="this.style.color=\'var(--color-text,#c9cdd4)\';this.style.background=\'var(--color-surface,#161b22)\'" onmouseleave="this.style.color=\'var(--color-text-faint,#6b7280)\';this.style.background=\'none\'">✕</button>' +
         '</div>' +
         '<div style="padding:16px;overflow-y:auto;flex:1;min-height:0;">' +
-          '<div id="ks-st" style="font-size:12px;padding:8px 12px;border-radius:var(--radius-md,6px);margin-bottom:12px;display:none;line-height:1.4;"></div>' +
+          '<div id="ks-st" style="font-size:12px;padding:10px 14px;border-radius:var(--radius-md,6px);margin-bottom:16px;display:none;line-height:1.5;background:var(--color-surface-raised,#1c2128);border:1px solid var(--color-line,#2d333b);color:var(--color-text,#c9cdd4);"></div>' +
           '<div id="ks-l" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;overflow-y:auto;max-height:180px;flex-shrink:0;"></div>' +
           '<div id="ks-frm" style="flex-shrink:0;">' +
-            '<div style="margin-bottom:14px;">' +
-              '<label style="display:block;margin:0 0 5px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.05em;">Provider ID</label>' +
-              '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false" style="width:100%;padding:10px 12px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,6px);background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;transition:border-color 0.15s,box-shadow 0.15s;">' +
+            '<div style="margin-bottom:18px;">' +
+              '<label style="display:block;margin:0 0 8px;font-size:12px;font-weight:400;color:var(--color-text,#c9cdd4);text-transform:uppercase;letter-spacing:0.04em;opacity:0.9;">Provider ID</label>' +
+              '<input id="ks-id" placeholder="e.g. my-provider" spellcheck="false" style="width:100%;padding:12px 14px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,6px);background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:14px;font-weight:400;box-sizing:border-box;outline:none;transition:all 0.2s ease;caret-color:var(--color-accent,#58a6ff);">' +
             '</div>' +
-            '<div style="margin-bottom:14px;">' +
-              '<label style="display:block;margin:0 0 5px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.05em;">Base URL</label>' +
-              '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false" style="width:100%;padding:10px 12px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,6px);background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;transition:border-color 0.15s,box-shadow 0.15s;">' +
+            '<div style="margin-bottom:18px;">' +
+              '<label style="display:block;margin:0 0 8px;font-size:12px;font-weight:400;color:var(--color-text,#c9cdd4);text-transform:uppercase;letter-spacing:0.04em;opacity:0.9;">Base URL</label>' +
+              '<input id="ks-url" placeholder="https://api.example.com/v1" spellcheck="false" style="width:100%;padding:12px 14px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,6px);background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:14px;font-weight:400;box-sizing:border-box;outline:none;transition:all 0.2s ease;caret-color:var(--color-accent,#58a6ff);">' +
             '</div>' +
-            '<div style="margin-bottom:14px;">' +
-              '<label style="display:block;margin:0 0 5px;font-size:11px;font-weight:500;color:var(--color-text-muted,#9aa0a8);text-transform:uppercase;letter-spacing:0.05em;">API Key</label>' +
-              '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false" style="width:100%;padding:10px 12px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,6px);background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:13px;box-sizing:border-box;outline:none;transition:border-color 0.15s,box-shadow 0.15s;">' +
+            '<div style="margin-bottom:20px;">' +
+              '<label style="display:block;margin:0 0 8px;font-size:12px;font-weight:400;color:var(--color-text,#c9cdd4);text-transform:uppercase;letter-spacing:0.04em;opacity:0.9;">API Key</label>' +
+              '<input id="ks-key" type="password" placeholder="sk-... (leave blank to keep existing)" spellcheck="false" style="width:100%;padding:12px 14px;border:1px solid var(--color-line,#2d333b);border-radius:var(--radius-md,6px);background:var(--color-surface,#161b22);color:var(--color-text,#c9cdd4);font-size:14px;box-sizing:border-box;outline:none;transition:all 0.2s ease;caret-color:var(--color-accent,#58a6ff);">' +
             '</div>' +
             '<div style="display:flex;gap:8px;">' +
-              '<button class="ks-s ks-p" onclick="ksS()" style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,transform 0.05s;" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'" onmouseleave="this.style.transform=\'scale(1)\'">Save Provider</button>' +
-              '<button class="ks-s ks-g" onclick="ksCf()" style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;text-align:center;background:transparent;color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,border-color 0.15s,transform 0.05s;" onmouseenter="this.style.background=\'var(--color-surface,#161b22)\';this.style.borderColor=\'var(--color-accent,#58a6ff)\'" onmouseleave="this.style.background=\'transparent\';this.style.borderColor=\'var(--color-line,#3d444d)\'" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'">Clear</button>' +
+              '<button class="ks-s ks-p" onclick="ksS()" style="flex:1;padding:10px 14px;font-size:14px;font-weight:600;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,transform 0.05s;" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'" onmouseleave="this.style.transform=\'scale(1)\'">Save Provider</button>' +
+              '<button class="ks-s ks-g" onclick="ksCf()" style="flex:1;padding:10px 14px;font-size:14px;font-weight:600;text-align:center;background:transparent;color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,border-color 0.15s,transform 0.05s;" onmouseenter="this.style.background=\'var(--color-surface,#161b22)\';this.style.borderColor=\'var(--color-accent,#58a6ff)\'" onmouseleave="this.style.background=\'transparent\';this.style.borderColor=\'var(--color-line,#3d444d)\'" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'">Clear</button>' +
             '</div>' +
           '</div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;padding:12px 16px 16px;border-top:1px solid var(--color-line,#2d333b);flex-shrink:0;">' +
-          '<button class="ks-s ks-p" onclick="ksR()" style="flex:1;padding:10px 14px;font-size:13px;font-weight:500;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,transform 0.05s;" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'" onmouseleave="this.style.transform=\'scale(1)\'">Restart Daemon</button>' +
-          '<button class="ks-s ks-g" onclick="ksRef()" style="flex:1;padding:10px 14px;font-size:13px;font-weight:500;text-align:center;background:transparent;color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,border-color 0.15s,transform 0.05s;" onmouseenter="this.style.background=\'var(--color-surface,#161b22)\';this.style.borderColor=\'var(--color-accent,#58a6ff)\'" onmouseleave="this.style.background=\'transparent\';this.style.borderColor=\'var(--color-line,#3d444d)\'" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'">Refresh List</button>' +
+          '<button class="ks-s ks-p" onclick="ksR()" style="flex:1;padding:10px 14px;font-size:14px;font-weight:400;text-align:center;background:var(--color-accent,#58a6ff);color:#fff;border:none;border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,transform 0.05s;" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'" onmouseleave="this.style.transform=\'scale(1)\'">Restart Daemon</button>' +
+          '<button class="ks-s ks-g" onclick="ksRef()" style="flex:1;padding:10px 14px;font-size:14px;font-weight:400;text-align:center;background:transparent;color:var(--color-text,#c9cdd4);border:1px solid var(--color-line,#3d444d);border-radius:var(--radius-md,6px);cursor:pointer;transition:background 0.15s,border-color 0.15s,transform 0.05s;" onmouseenter="this.style.background=\'var(--color-surface,#161b22)\';this.style.borderColor=\'var(--color-accent,#58a6ff)\'" onmouseleave="this.style.background=\'transparent\';this.style.borderColor=\'var(--color-line,#3d444d)\'" onmousedown="this.style.transform=\'scale(0.98)\'" onmouseup="this.style.transform=\'scale(1)\'">Refresh List</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(modal);
@@ -99,11 +99,11 @@
 
     var left = document.createElement('div');
     left.style.cssText = 'flex:1;min-width:0;';
-    left.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--color-text,#c9cdd4);">Provider Settings</div>' +
-      '<div style="font-size:11px;color:var(--color-text-muted,#9aa0a8);margin-top:1px;">Manage custom LLM providers</div>';
+    left.innerHTML = '<div style="font-size:14px;font-weight:400;color:var(--color-text,#c9cdd4);">Provider Settings</div>' +
+      '<div style="font-size:11px;color:var(--color-text,#c9cdd4);margin-top:1px;opacity:0.8;">Manage custom LLM providers</div>';
 
     var right = document.createElement('div');
-    right.style.cssText = 'display:flex;align-items:center;gap:4px;color:var(--color-text-faint,#6b7280);font-size:13px;';
+    right.style.cssText = 'display:flex;align-items:center;gap:6px;color:var(--color-text-faint,#6b7280);font-size:14px;';
     right.innerHTML = cogSvg;
 
     row.appendChild(left);
@@ -214,6 +214,10 @@
       el.style.border = 'none';
       el.style.textAlign = 'center';
       el.style.padding = '20px';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      el.style.gap = '8px';
     } else {
       el.style.background = 'rgba(63,185,80,0.1)';
       el.style.color = 'var(--color-success,#3fb950)';
@@ -228,37 +232,37 @@
   window.ksRef = function() {
     var l = document.getElementById('ks-l');
     if (!l) return;
-    l.innerHTML = '<div style="color:var(--color-text-muted,#9aa0a8);text-align:center;padding:20px;font-size:13px;">Loading providers...</div>';
+    l.innerHTML = '<div style="color:var(--color-text,#c9cdd4);text-align:center;padding:20px;font-size:14px;">Loading providers...</div>';
     fetch('/kimi-admin/providers').then(function(r) { return r.json(); }).then(function(d) {
       if (!d.success || !d.providers) {
-        l.innerHTML = '<div style="background:rgba(248,81,73,0.1);color:var(--color-danger,#f85149);padding:12px;text-align:center;border-radius:6px;border:1px solid rgba(248,81,73,0.25);font-size:13px;">Failed to load providers</div>';
+        l.innerHTML = '<div style="background:rgba(248,81,73,0.1);color:var(--color-danger,#f85149);padding:12px;text-align:center;border-radius:6px;border:1px solid rgba(248,81,73,0.25);font-size:14px;">Failed to load providers</div>';
         return;
       }
       currentProviders = d.providers;
       if (d.providers.length === 0) {
-        l.innerHTML = '<div style="color:var(--color-text-faint,#6b7280);padding:12px;text-align:center;font-size:13px;">No providers configured. Add one below.</div>';
+        l.innerHTML = '<div style="color:var(--color-text-faint,#6b7280);padding:12px;text-align:center;font-size:14px;">No providers configured. Add one below.</div>';
         return;
       }
       l.innerHTML = d.providers.map(function(p) {
         var canDel = (p.id !== 'opencode-zen' && p.id !== 'omniroute');
-        var delBtn = canDel ? '<button onclick="ksD(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:4px 8px;border:none;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;background:var(--color-danger,#f85149);color:#fff;font-family:inherit;">Del</button>' : '';
+        var delBtn = canDel ? '<button onclick="ksD(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:4px 8px;border:none;border-radius:6px;font-size:11px;font-weight:400;cursor:pointer;background:var(--color-danger,#f85149);color:#fff;font-family:inherit;">Del</button>' : '';
         var keyStatus = p.has_api_key
           ? '✅ ' + (p.api_key_masked || 'Key set')
           : '⚠️ No key';
         return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--color-line,#2d333b);border-radius:8px;background:var(--color-surface,#161b22);">' +
           '<div style="flex:1;min-width:0;">' +
-            '<div style="font-size:13px;font-weight:600;color:var(--color-text,#c9cdd4);">' + escHtml(p.id) + '</div>' +
+            '<div style="font-size:14px;font-weight:600;color:var(--color-text,#c9cdd4);">' + escHtml(p.id) + '</div>' +
             '<div style="font-size:11px;color:var(--color-text-faint,#6b7280);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(p.base_url) + '</div>' +
-            '<div style="font-size:11px;color:var(--color-text-muted,#9aa0a8);margin-top:1px;">' + keyStatus + '</div>' +
+            '<div style="font-size:11px;color:var(--color-text,#c9cdd4);margin-top:1px;">' + keyStatus + '</div>' +
           '</div>' +
           '<div style="display:flex;gap:4px;flex-shrink:0;">' +
-            '<button onclick="ksE(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:4px 8px;border:none;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;background:var(--color-accent,#58a6ff);color:#fff;font-family:inherit;">Edit</button>' +
+            '<button onclick="ksE(\'' + p.id.replace(/'/g, "\\'") + '\')" style="padding:4px 8px;border:none;border-radius:6px;font-size:11px;font-weight:400;cursor:pointer;background:var(--color-accent,#58a6ff);color:#fff;font-family:inherit;">Edit</button>' +
             delBtn +
           '</div>' +
         '</div>';
       }).join('');
     }).catch(function(e) {
-      l.innerHTML = '<div style="background:rgba(248,81,73,0.1);color:var(--color-danger,#f85149);padding:12px;text-align:center;border-radius:6px;border:1px solid rgba(248,81,73,0.25);font-size:13px;">' + escHtml(e.message) + '</div>';
+      l.innerHTML = '<div style="background:rgba(248,81,73,0.1);color:var(--color-danger,#f85149);padding:12px;text-align:center;border-radius:6px;border:1px solid rgba(248,81,73,0.25);font-size:14px;">' + escHtml(e.message) + '</div>';
     });
   };
 
