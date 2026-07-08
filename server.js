@@ -402,14 +402,79 @@ function checkAndRestore() {
 }
 
 function startBackupScheduler() {
-  log(`📅 Backup scheduler: every ${BACKUP_INTERVAL_MIN} minutes`);
-  // First backup after 2 minutes (give Kimi time to start)
+  log(`📅 Backup scheduler: every ${BACKUP_INTERVAL_MIN} min + auto on session changes`);
+
+  // First backup after 60s (give Kimi time to start)
   setTimeout(() => {
     log('📤 Running initial backup...');
     performBackup();
-  }, 120000);
-  // Periodic backup
+  }, 60000);
+
+  // Periodic backup as safety net
   setInterval(performBackup, BACKUP_INTERVAL_MIN * 60 * 1000);
+
+  // ====== AUTO-BACKUP on session changes (fs.watch + debounce) ======
+  let debounceTimer = null;
+  let lastChangeCount = 0;
+  const DEBOUNCE_MS = 10000; // wait 10s after last change before backing up
+
+  function scheduleAutoBackup() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      // Skip if no actual change (watch fires on read too)
+      try {
+        const sessionsDir = path.join(KIMI_HOME, 'sessions');
+        if (fs.existsSync(sessionsDir)) {
+          const count = countSessionFiles(sessionsDir);
+          if (count === lastChangeCount) return; // no real change
+          lastChangeCount = count;
+        }
+      } catch (e) {}
+      log('💾 Session changed — auto-backup triggered');
+      performBackup();
+    }, DEBOUNCE_MS);
+  }
+
+  function countSessionFiles(dir) {
+    let count = 0;
+    try {
+      const items = fs.readdirSync(dir, { withFileTypes: true });
+      for (const item of items) {
+        if (item.isDirectory()) {
+          const subDir = path.join(dir, item.name);
+          try { count += fs.readdirSync(subDir).length; } catch (e) {}
+        }
+      }
+    } catch (e) {}
+    return count;
+  }
+
+  // Watch sessions directory recursively
+  try {
+    const sessionsDir = path.join(KIMI_HOME, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+
+    // Count initial files for change detection
+    try { lastChangeCount = countSessionFiles(sessionsDir); } catch (e) {}
+
+    const watcher = fs.watch(sessionsDir, { recursive: true }, (eventType, filename) => {
+      if (filename && !filename.endsWith('.tmp')) {
+        scheduleAutoBackup();
+      }
+    });
+
+    watcher.on('error', (err) => {
+      log(`⚠️ Sessions watcher error: ${err.message} — will re-watch in 5s`);
+      setTimeout(() => {
+        try { fs.watch(sessionsDir, { recursive: true }, scheduleAutoBackup); } catch (e) {}
+      }, 5000);
+    });
+
+    log(`👁️ Watching sessions dir for changes: ${sessionsDir}`);
+  } catch (err) {
+    log(`⚠️ Could not start session watcher: ${err.message} — periodic backup only`);
+  }
 }
 
 // ====== CLOUDFLARE TUNNEL (trycloudflare) ======
