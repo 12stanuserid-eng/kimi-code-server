@@ -474,7 +474,7 @@ function restoreFromPentaract() {
     });
     // Try each backup until one works (some may be deleted from Telegram)
     const tempFile = '/tmp/pentaract-restore.tar.gz';
-    for (let i = 0; i < Math.min(backups.length, 10); i++) {
+    for (let i = 0; i < Math.min(backups.length, 20); i++) {
       const bk = backups[i];
       log(`🔄 Trying backup ${i+1}/${Math.min(backups.length, 10)}: ${bk.path} (${bk.size} bytes)`);
       try {
