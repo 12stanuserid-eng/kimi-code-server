@@ -360,8 +360,7 @@
       if (d.success) {
         ksRef();
         ksCf();
-        // Auto-restart daemon so models appear in selector immediately
-        ksAutoRestart(5000);
+        ksSt('Saved! Models will appear after page reload. ' + (d.models_discovered > 0 ? '(' + d.models_discovered + ' models found)' : ''), 'ks-ok');
       } else {
         ksSt('Error: ' + (d.error || 'Unknown error'), 'ks-bad');
       }
@@ -378,8 +377,7 @@
       .then(function(d) {
         if (d.success) {
           ksRef();
-          // Auto-restart daemon so deleted provider disappears from selector
-          ksAutoRestart(4000);
+          ksSt('Deleted! Reload page to see changes.', 'ks-ok');
         }
         else { ksSt('Error: ' + (d.error || '?'), 'ks-bad'); }
       })
@@ -395,8 +393,7 @@
         if (d.success) {
           ksRef();
           if (d.models_discovered > 0) {
-            // Auto-restart daemon so new models appear in selector
-            ksAutoRestart(5000);
+            ksSt('Rediscovered ' + d.models_discovered + ' models! Reload page to see changes.', 'ks-ok');
           } else {
             ksSt(d.message || 'No models found. Check API key and base URL.', 'ks-bad');
           }

@@ -456,32 +456,44 @@ function restoreFromPentaract() {
     if (listResult.trim().startsWith('<')) throw new Error('Cloudflare challenge on list');
     const data = JSON.parse(listResult);
     if (!data.files || data.files.length === 0) { log('ℹ️ No remote backups found'); return false; }
-    // Sort by timestamp in filename (newest first) — extract ISO timestamps from filenames
-    data.files.sort((a, b) => {
+    // Filter to only tar.gz files (skip speed tests, etc.)
+    const backups = data.files.filter(f => f.path.endsWith('.tar.gz') && f.size > 2000);
+    if (backups.length === 0) { log('ℹ️ No valid backup files found'); return false; }
+    // Sort by timestamp in filename (newest first)
+    backups.sort((a, b) => {
       const ta = a.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
       const tb = b.path.match(/(\d{4}-\d{2}-\d{2}T[\d-]+)/);
-      if (ta && tb) return tb[1].localeCompare(ta[1]); // newest first
-      if (ta) return -1; // timestamped files first
+      if (ta && tb) return tb[1].localeCompare(ta[1]);
+      if (ta) return -1;
       if (tb) return 1;
-      return b.path.localeCompare(a.path); // fallback: newest name first
+      return b.path.localeCompare(a.path);
     });
-    const latest = data.files[0];
-    log(`🔄 Downloading from Pentaract: ${latest.path}`);
+    // Try each backup until one works (some may be deleted from Telegram)
     const tempFile = '/tmp/pentaract-restore.tar.gz';
-    execSync(`curl ${CURL_FLAGS} "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${latest.path}" \
-      -H "Authorization: Bearer ${token}" -o "${tempFile}"`, { timeout: 120000 });
-    // Validate tar.gz magic bytes
-    const buf = fs.readFileSync(tempFile);
-    if (buf[0] !== 0x1f || buf[1] !== 0x8b) throw new Error('Downloaded file is not valid tar.gz');
-    // Detect backup format: new (files at root) vs old (files under .kimi-code/)
-    const tarList = execSync(`tar -tzf "${tempFile}" 2>/dev/null`, { encoding: 'utf8' });
-    const isNewFormat = tarList.includes('sessions/') || tarList.includes('config.toml');
-    const extractDir = isNewFormat ? KIMI_HOME : path.dirname(KIMI_HOME);
-    log(`🔄 Backup format: ${isNewFormat ? 'new (direct)' : 'old (nested .kimi-code/)'}, extracting to: ${extractDir}`);
-    execSync(`tar -xzf "${tempFile}" -C "${extractDir}" && rm -f "${tempFile}"`, { timeout: 30000 });
-    log('✅ Pentaract restore completed');
-    patchWorkspaceRoots();
-    return true;
+    for (let i = 0; i < Math.min(backups.length, 10); i++) {
+      const bk = backups[i];
+      log(`🔄 Trying backup ${i+1}/${Math.min(backups.length, 10)}: ${bk.path} (${bk.size} bytes)`);
+      try {
+        execSync(`curl ${CURL_FLAGS} "${PENTARACT_URL}/api/files/${BACKUP_STORAGE_ID}/download/${bk.path}" \
+          -H "Authorization: Bearer ${token}" -o "${tempFile}"`, { timeout: 120000 });
+        const buf = fs.readFileSync(tempFile);
+        if (buf[0] !== 0x1f || buf[1] !== 0x8b) { log(`⚠️ Not valid tar.gz: ${bk.path}`); continue; }
+        // Check if it has sessions
+        const tarList = execSync(`tar -tzf "${tempFile}" 2>/dev/null`, { encoding: 'utf8' });
+        if (!tarList.includes('sessions/')) { log(`⚠️ No sessions in ${bk.path}, skipping`); continue; }
+        const isNewFormat = tarList.includes('config.toml');
+        const extractDir = isNewFormat ? KIMI_HOME : path.dirname(KIMI_HOME);
+        log(`🔄 Restoring from ${bk.path} (format: ${isNewFormat ? 'new' : 'old'})`);
+        execSync(`tar -xzf "${tempFile}" -C "${extractDir}" && rm -f "${tempFile}"`, { timeout: 30000 });
+        log(`✅ Pentaract restore completed from ${bk.path}`);
+        patchWorkspaceRoots();
+        return true;
+      } catch (err) {
+        log(`⚠️ Failed to restore from ${bk.path}: ${err.message}`);
+        try { fs.unlinkSync(tempFile); } catch(e) {}
+      }
+    }
+    throw new Error('All backup downloads failed or had no sessions');
   } catch (err) {
     log(`❌ Pentaract restore failed: ${err.message}`);
     return false;
@@ -1405,23 +1417,36 @@ const server = http.createServer((req, res) => {
   }
 
   // POST /kimi-admin/backup-restore — restore from latest backup
-  if (req.url === '/kimi-admin/backup-restore' && req.method === 'POST') {
+  // Optional query: ?source=pentaract (force Pentaract) or ?source=local (force local)
+  if (req.url.startsWith('/kimi-admin/backup-restore') && req.method === 'POST') {
     let restored = false;
-    // Try local first
+    const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const source = urlObj.searchParams.get('source') || 'auto';
     const localBk = getLatestLocalBackup();
-    if (localBk) {
-      restored = restoreFromLocalBackup(localBk.file);
-    }
-    // Try Pentaract if local didn't work
-    if (!restored) {
+
+    if (source === 'local') {
+      // Force local only
+      if (localBk) restored = restoreFromLocalBackup(localBk.file);
+    } else if (source === 'pentaract') {
+      // Force Pentaract only
       restored = restoreFromPentaract();
+    } else {
+      // Auto: try local first, but skip if it's too small (< 5KB = config-only, no sessions)
+      if (localBk && localBk.size >= 5000) {
+        restored = restoreFromLocalBackup(localBk.file);
+      }
+      if (!restored) {
+        restored = restoreFromPentaract();
+      }
     }
+
     res.writeHead(200, {'Content-Type': 'application/json'});
     res.end(JSON.stringify({
       success: restored,
       message: restored
         ? 'Restore completed. Restart daemon to apply.'
         : 'No backup found or restore failed',
+      source_used: source === 'pentaract' ? 'pentaract' : (source === 'local' ? 'local' : (localBk && localBk.size >= 5000 ? 'local' : 'pentaract')),
       local_backup: localBk ? localBk.name : null
     }));
     return;
@@ -1516,21 +1541,23 @@ const server = http.createServer((req, res) => {
           });
           // Inject workspace IDs into localStorage so sessions appear in UI
           const wsScript = '<script>\n(function(){\n  var ids = ' + JSON.stringify(wsIds) + ';\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    ids.forEach(function(id){ if(o.indexOf(id)===-1) o.push(id); });\n    localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n  } catch(e){}\n})();\n</script>';
-          // WebSocket redirect — only for *.onrender.com (Cloudflare-proxied) domains
-          // Custom domains (e.g. kimicode.dpdns.org) point directly to Render, no Cloudflare WS block
+          // WebSocket redirect — needed whenever Cloudflare is proxying (blocks WS upgrades)
+          // Detects Cloudflare via cf-ray header OR known Render Cloudflare domains
           const reqHost = req.headers['host'] || '';
+          const cfRay = req.headers['cf-ray'] || null;
+          const cfVia = (req.headers['via'] || '').toLowerCase().includes('cloudflare');
+          const isCloudflare = cfRay !== null || cfVia;
           const isOnRenderDomain = reqHost.endsWith('.onrender.com') || reqHost.includes('.onrender.com:');
           let wsRedirect;
-          if (isOnRenderDomain && tunnelUrl) {
-            // Cloudflare blocks WS on *.onrender.com — redirect through cloudflared tunnel
+          if ((isCloudflare || isOnRenderDomain) && tunnelUrl) {
+            // Cloudflare blocks WS — redirect through cloudflared tunnel
             const tunnelOrigin = (() => { try { return new URL(tunnelUrl).origin; } catch(e) { return null; } })();
             if (tunnelOrigin) {
               wsRedirect = '<script>\n(function(){\n  var targetOrigin = ' + JSON.stringify(tunnelOrigin) + ';\n  var pageOrigin = window.location.origin;\n  var NativeWS = window.WebSocket;\n  window.WebSocket = function(url, protocols) {\n    if (typeof url === "string" && url.indexOf(pageOrigin + "/api/v1/ws") === 0) {\n      url = url.replace(pageOrigin, targetOrigin);\n    }\n    return new NativeWS(url, protocols);\n  };\n  window.WebSocket.prototype = NativeWS.prototype;\n  window.WebSocket.CONNECTING = 0;\n  window.WebSocket.OPEN = 1;\n  window.WebSocket.CLOSING = 2;\n  window.WebSocket.CLOSED = 3;\n})();\n</script>';
             }
           }
-          // For custom domains (no Cloudflare), no WS redirect needed — direct connection works fine
           if (!wsRedirect) {
-            wsRedirect = '<!-- WS direct: ' + (isOnRenderDomain ? 'tunnel not ready' : 'custom domain - no redirect needed') + ' -->';
+            wsRedirect = '<!-- WS direct: tunnel not ready or no Cloudflare detected -->';
           }
           const settingsPanelScript = '<link rel="stylesheet" href="/kimi-admin/panel.css"><script src="/kimi-admin/panel.js"></script>';
           const allScripts = wsScript + '\n' + wsRedirect + '\n' + settingsPanelScript;
