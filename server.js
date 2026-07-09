@@ -197,7 +197,7 @@ function scheduleRestart() {
 
 // ====== PENTARACT BACKUP / RESTORE (v2 — local fallback + proper headers) ======
 
-const CURL_FLAGS = '-s --max-time 60 -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 KimiCodeBackup/1.0"';
+const CURL_FLAGS = '-s --max-time 60 -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" -H "Accept: application/json, text/plain, */*" -H "Accept-Language: en-US,en;q=0.9"';
 const LOCAL_BACKUP_DIR = path.join(os.tmpdir(), 'kimi-backups');
 const LOCAL_BACKUP_MAX = 5;
 
@@ -220,19 +220,42 @@ function getTarCompressArgs() {
 }
 
 function pentaractLogin() {
-  try {
-    const result = execSync(`curl ${CURL_FLAGS} -X POST "${PENTARACT_URL}/api/auth/login" \
-      -H "Content-Type: application/x-www-form-urlencoded" \
-      -d "email=${encodeURIComponent(PENTARACT_EMAIL)}" -d "password=${encodeURIComponent(PENTARACT_PASS)}"`, {
-      timeout: 20000, encoding: 'utf8'
-    });
-    if (result.trim().startsWith('<')) throw new Error('Got HTML instead of JSON (Cloudflare challenge)');
-    const data = JSON.parse(result);
-    if (!data.access_token) throw new Error('No access_token in response');
-    return data.access_token;
-  } catch (err) {
-    throw new Error(`Pentaract login failed: ${err.message}`);
+  // Retry up to 3 times with backoff — Cloudflare sometimes blocks from Render IPs
+  const MAX_ATTEMPTS = 3;
+  const BACKOFF_MS = [2000, 5000, 10000]; // 2s, 5s, 10s
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      // Use browser-like headers to reduce Cloudflare bot detection
+      const result = execSync(`curl -s --max-time 30 \
+        -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
+        -H "Accept: application/json, text/plain, */*" \
+        -H "Accept-Language: en-US,en;q=0.9" \
+        -H "Accept-Encoding: gzip, deflate, br" \
+        -H "Connection: keep-alive" \
+        -H "Origin: ${PENTARACT_URL}" \
+        -H "Referer: ${PENTARACT_URL}/" \
+        -X POST "${PENTARACT_URL}/api/auth/login" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "email=${encodeURIComponent(PENTARACT_EMAIL)}&password=${encodeURIComponent(PENTARACT_PASS)}"`, {
+        timeout: 30000, encoding: 'utf8'
+      });
+      if (result.trim().startsWith('<')) throw new Error('Got HTML instead of JSON (Cloudflare challenge)');
+      const data = JSON.parse(result);
+      if (!data.access_token) throw new Error('No access_token in response');
+      if (attempt > 1) log(`✅ Pentaract login succeeded on attempt ${attempt}`);
+      return data.access_token;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_ATTEMPTS) {
+        log(`⚠️ Pentaract login attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message} — retrying in ${BACKOFF_MS[attempt-1]/1000}s`);
+        // Synchronous sleep using execSync with timeout
+        try { execSync(`sleep ${BACKOFF_MS[attempt-1] / 1000}`, { timeout: BACKOFF_MS[attempt-1] + 1000 }); } catch(e) {}
+      }
+    }
   }
+  throw new Error(`Pentaract login failed after ${MAX_ATTEMPTS} attempts: ${lastErr.message}`);
 }
 
 // ====== LOCAL BACKUP (always works, no network needed) ======
@@ -342,6 +365,7 @@ function restoreFromLocalBackup(backupPath) {
     fixSessionHomedirPaths();
     log('✅ Local restore completed');
     patchWorkspaceRoots();
+    ensureWorkspaceMapping();
     regenerateSessionIndex();
     return true;
   } catch (err) {
@@ -550,6 +574,7 @@ function restoreFromPentaract() {
 
         log(`✅ Pentaract restore completed from ${bk.path}`);
         patchWorkspaceRoots();
+        ensureWorkspaceMapping();
         regenerateSessionIndex();
         return true;
       } catch (err) {
@@ -689,13 +714,33 @@ function regenerateSessionIndex() {
       log(`⚠️ Could not read workspaces.json: ${e.message}`);
     }
 
+    // Detect the current workspace root (CWD of kimi daemon)
+    const currentWorkDir = path.dirname(KIMI_HOME); // /opt/render on Render, /root on local
+
     const entries = [];
     let skipped = 0;
     const wsDirs = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter(d => d.isDirectory());
     for (const ws of wsDirs) {
       const wsPath = path.join(sessionsDir, ws.name);
       // Look up workDir for this bucket — must be absolute path
-      const workDir = wsMap[ws.name] || path.join(path.dirname(KIMI_HOME), ws.name.replace(/^wd_/, '').replace(/_[a-f0-9]+$/, ''));
+      let workDir = wsMap[ws.name];
+      if (!workDir) {
+        // Fallback: try to derive workDir from workspace hash name
+        // Format: wd_<dirname>_<hash> → <dirname> is the workspace type
+        const parts = ws.name.replace(/^wd_/, '').split('_');
+        const wsType = parts[0]; // e.g., 'render', 'tmp', 'root', '.kimi-code'
+        // Map known workspace types to actual paths
+        if (wsType === 'render' || wsType === 'tmp') {
+          workDir = path.join(currentWorkDir, 'project', 'src'); // Render workspace
+        } else if (wsType === 'root') {
+          workDir = '/root'; // Local machine
+        } else if (wsType === '.kimi-code' || wsType === 'kimi-code') {
+          workDir = KIMI_HOME;
+        } else {
+          workDir = currentWorkDir; // generic fallback
+        }
+        log(`🔧 No workspaces.json entry for "${ws.name}" — using derived path: ${workDir}`);
+      }
       const sessDirs = fs.readdirSync(wsPath, { withFileTypes: true }).filter(d => d.isDirectory());
       for (const sess of sessDirs) {
         const sessionDir = path.join(wsPath, sess.name);
@@ -852,6 +897,60 @@ function patchWorkspaceRoots() {
   } catch (e) {}
 }
 
+// ====== ENSURE WORKSPACE MAPPING ======
+// After restore, ensure every workspace hash in sessions/ has a mapping in workspaces.json
+function ensureWorkspaceMapping() {
+  try {
+    const sessionsDir = path.join(KIMI_HOME, 'sessions');
+    if (!fs.existsSync(sessionsDir)) return;
+
+    const wsPath = path.join(KIMI_HOME, 'workspaces.json');
+    let wsData = { workspaces: {} };
+    try {
+      if (fs.existsSync(wsPath)) wsData = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
+      if (!wsData.workspaces) wsData.workspaces = {};
+    } catch(e) {}
+
+    const renderHome = path.dirname(KIMI_HOME); // /opt/render on Render
+    const currentWorkDir = path.join(renderHome, 'project', 'src'); // kimi daemon CWD on Render
+
+    let added = 0;
+    const wsDirs = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const ws of wsDirs) {
+      if (wsData.workspaces[ws.name]) continue; // already mapped
+
+      // Derive workDir from workspace hash name
+      const parts = ws.name.replace(/^wd_/, '').split('_');
+      const wsType = parts[0];
+      let workDir;
+      if (wsType === 'render' || wsType === 'tmp') {
+        workDir = currentWorkDir;
+      } else if (wsType === 'root') {
+        workDir = '/root';
+      } else if (wsType === '.kimi-code' || wsType === 'kimi-code') {
+        workDir = KIMI_HOME;
+      } else {
+        workDir = renderHome;
+      }
+
+      wsData.workspaces[ws.name] = {
+        id: ws.name,
+        root: workDir,
+        name: ws.name
+      };
+      added++;
+      log(`🔧 Added workspace mapping: ${ws.name} → ${workDir}`);
+    }
+
+    if (added > 0) {
+      fs.writeFileSync(wsPath, JSON.stringify(wsData, null, 2));
+      log(`✅ Added ${added} workspace mappings to workspaces.json`);
+    }
+  } catch (err) {
+    log(`⚠️ ensureWorkspaceMapping failed: ${err.message}`);
+  }
+}
+
 // ====== SMART RESTORE ======
 
 function checkAndRestore() {
@@ -888,20 +987,83 @@ function checkAndRestore() {
         return true;
       }
     }
-    // Fall back to Pentaract
-    if (restoreFromPentaract()) {
-      try { performLocalBackup(); } catch (e) {}
-      log('🔄 Restarting daemon after Pentaract restore...');
-      restartKimiDaemon();
-      return true;
+    // Fall back to Pentaract with retry (Cloudflare challenge is intermittent from Render)
+    const MAX_RESTORE_ATTEMPTS = 3;
+    const RESTORE_BACKOFF = [3000, 8000, 15000]; // 3s, 8s, 15s
+    for (let attempt = 1; attempt <= MAX_RESTORE_ATTEMPTS; attempt++) {
+      log(`🔄 Pentaract restore attempt ${attempt}/${MAX_RESTORE_ATTEMPTS}...`);
+      if (restoreFromPentaract()) {
+        try { performLocalBackup(); } catch (e) {}
+        log('🔄 Restarting daemon after Pentaract restore...');
+        restartKimiDaemon();
+        return true;
+      }
+      if (attempt < MAX_RESTORE_ATTEMPTS) {
+        log(`⏳ Waiting ${RESTORE_BACKOFF[attempt-1]/1000}s before next restore attempt...`);
+        try { execSync(`sleep ${RESTORE_BACKOFF[attempt-1] / 1000}`, { timeout: RESTORE_BACKOFF[attempt-1] + 1000 }); } catch(e) {}
+      }
     }
-    log('⚠️ No backup source available — starting fresh');
+    log('⚠️ All restore attempts failed — starting fresh (sessions will be created new)');
     return false;
   } else {
     log('✅ Sessions found locally');
+    // Verify session index is healthy
+    const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
+    try {
+      if (!fs.existsSync(indexPath) || fs.readFileSync(indexPath, 'utf8').trim().length === 0) {
+        log('⚠️ Session index missing or empty — regenerating...');
+        ensureWorkspaceMapping();
+        regenerateSessionIndex();
+      }
+    } catch(e) {}
     try { performLocalBackup(); } catch (e) {}
     return true;
   }
+}
+
+// ====== DELAYED RESTORE RETRIES ======
+// If initial restore fails (Cloudflare challenge), retry at increasing intervals
+function scheduleDelayedRestoreAttempts() {
+  const RETRY_DELAYS = [2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000]; // 2min, 5min, 10min
+  let attempt = 0;
+
+  function tryRestore() {
+    attempt++;
+    // Check if sessions already exist (maybe another restore succeeded)
+    const sessionsDir = path.join(KIMI_HOME, 'sessions');
+    try {
+      if (fs.existsSync(sessionsDir)) {
+        const items = fs.readdirSync(sessionsDir);
+        for (const item of items) {
+          try {
+            const itemPath = path.join(sessionsDir, item);
+            if (fs.statSync(itemPath).isDirectory() && fs.readdirSync(itemPath).length > 0) {
+              log(`✅ Sessions already present — skipping delayed restore attempt ${attempt}`);
+              return; // sessions exist, no need to restore
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+
+    log(`🔄 Delayed restore attempt ${attempt}/${RETRY_DELAYS.length}...`);
+    if (restoreFromPentaract()) {
+      try { performLocalBackup(); } catch (e) {}
+      log('🔄 Restarting daemon after delayed Pentaract restore...');
+      restartKimiDaemon();
+      return; // success, stop retrying
+    }
+    if (attempt < RETRY_DELAYS.length) {
+      const delay = RETRY_DELAYS[attempt]; // attempt 0 already used first delay
+      log(`⏳ Next delayed restore in ${delay/1000}s...`);
+      setTimeout(tryRestore, delay);
+    } else {
+      log('⚠️ All delayed restore attempts exhausted — sessions will be created fresh');
+    }
+  }
+
+  log(`📅 Scheduled ${RETRY_DELAYS.length} delayed restore attempts (2min, 5min, 10min)`);
+  setTimeout(tryRestore, RETRY_DELAYS[0]);
 }
 
 function startBackupScheduler() {
@@ -1684,6 +1846,7 @@ const server = http.createServer((req, res) => {
 
     // After restore, always regenerate session index and restart daemon
     if (restored) {
+      try { ensureWorkspaceMapping(); } catch(e) {}
       try { regenerateSessionIndex(); } catch(e) {}
       try { restartKimiDaemon(); } catch(e) {}
     }
@@ -2055,7 +2218,17 @@ server.listen(PORT, '0.0.0.0', () => {
   log('💾 Backup system v2 — local + Pentaract dual backup active');
   log('🚇 Cloudflare Tunnel will start in 10s — check /tunnel-url for the URL');
   // Start backup scheduler after 20s (gives Kimi daemon time to initialize)
-  setTimeout(() => { checkAndRestore(); startBackupScheduler(); syncBothLocations(); }, 20000);
+  setTimeout(() => {
+    // Ensure workspace mappings exist before restore/index regeneration
+    try { ensureWorkspaceMapping(); } catch(e) {}
+    const restored = checkAndRestore();
+    startBackupScheduler();
+    syncBothLocations();
+    // If restore failed, schedule delayed retries (Cloudflare challenge may be temporary)
+    if (!restored) {
+      scheduleDelayedRestoreAttempts();
+    }
+  }, 20000);
 });
 
 // Crash recovery — prevent event-loop-blocking backup from killing the server
