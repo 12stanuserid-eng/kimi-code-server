@@ -688,8 +688,8 @@ max_context_size = 16000
 
 [models."nvidia-moonshotai_kimi-k2_6"]
 provider = "nvidia-moonshotai"
-model = "nvidia/moonshotai/kimi-k2-6"
-max_context_size = 16000
+model = "moonshotai/kimi-k2.6"
+max_context_size = 128000
 
 [models."nvidia-llama-3-1-nemotron-ultra-253b-v1"]
 provider = "nvidia"
