@@ -546,50 +546,58 @@ function restoreFromPentaract() {
         const existingConfig = fs.existsSync(getConfigPath()) ? fs.readFileSync(getConfigPath(), 'utf8') : '';
         const hasExistingProviders = existingConfig.includes('[providers.');
         if (hasExistingProviders) {
-          // Extract to temp dir, then manually copy sessions only (skip config.toml)
+          // Extract to temp dir, then COPY only items that don't exist locally (NEVER overwrite)
           const tmpExtract = '/tmp/kimi-restore-tmp';
           fs.rmSync(tmpExtract, { recursive: true, force: true });
           fs.mkdirSync(tmpExtract, { recursive: true });
           execSync(`tar -xzf "${tempFile}" -C "${tmpExtract}"`, { timeout: 30000 });
-          // Copy everything EXCEPT config.toml
           const extractedHome = hasDotKimiPrefix ? path.join(tmpExtract, '.kimi-code') : tmpExtract;
+          let copiedCount = 0;
           if (fs.existsSync(extractedHome)) {
             for (const item of fs.readdirSync(extractedHome)) {
-              if (item === 'config.toml') continue; // preserve existing
+              if (item === 'config.toml') continue; // NEVER touch config
               const src = path.join(extractedHome, item);
               const dst = path.join(KIMI_HOME, item);
-              // MERGE mode: skip existing items (never overwrite current sessions/states)
-              if (fs.existsSync(dst)) {
-                // For session dirs, skip entirely — don't overwrite with older backup
-                if (item === 'sessions' || item === 'workspaces.json' || item === 'workspace_index.json') {
-                  log(`  Skipped ${item} — already exists (preserving current state)`);
-                  continue;
-                }
-                // For other items, only merge contents without replacing dirs
-                if (fs.statSync(src).isDirectory() && fs.statSync(dst).isDirectory()) {
-                  for (const sub of fs.readdirSync(src)) {
-                    const subSrc = path.join(src, sub);
-                    const subDst = path.join(dst, sub);
-                    if (!fs.existsSync(subDst)) {
-                      fs.cpSync(subSrc, subDst, { recursive: true });
-                      log(`  Merged: ${item}/${sub}`);
+              // COPY-ONLY mode: agar local pe pehle se hai to SKIP, nahi hai to COPY karo
+              if (item === 'sessions') {
+                // Sessions: iterate workspace dirs, copy only new session dirs
+                if (fs.existsSync(dst)) {
+                  for (const wsName of fs.readdirSync(src)) {
+                    const wsSrc = path.join(src, wsName);
+                    const wsDst = path.join(dst, wsName);
+                    if (!fs.existsSync(wsDst)) {
+                      fs.cpSync(wsSrc, wsDst, { recursive: true });
+                      copiedCount++;
+                      log(`  Copied new workspace: ${wsName}`);
                     } else {
-                      log(`  Skipped: ${item}/${sub} (already exists)`);
+                      // Workspace exists, copy only new session dirs inside
+                      for (const sessName of fs.readdirSync(wsSrc)) {
+                        const sessSrc = path.join(wsSrc, sessName);
+                        const sessDst = path.join(wsDst, sessName);
+                        if (!fs.existsSync(sessDst)) {
+                          fs.cpSync(sessSrc, sessDst, { recursive: true });
+                          copiedCount++;
+                          log(`  Copied new session: ${wsName}/${sessName}`);
+                        }
+                      }
                     }
                   }
                 } else {
-                  log(`  Skipped: ${item} (already exists)`);
+                  fs.cpSync(src, dst, { recursive: true });
+                  copiedCount++;
+                  log(`  Copied entire sessions dir`);
                 }
-              } else {
+              } else if (!fs.existsSync(dst)) {
+                // Non-session items: only copy if doesn't exist locally
                 fs.cpSync(src, dst, { recursive: true });
-                log(`  Restored: ${item}`);
+                log(`  Copied new: ${item}`);
+              } else {
+                log(`  Skipped existing: ${item}`);
               }
             }
-          } else {
-            log(`⚠️ Extracted home not found: ${extractedHome}`);
           }
           fs.rmSync(tmpExtract, { recursive: true, force: true });
-          log('✅ Preserved existing config.toml (has providers)');
+          log(`✅ Restore: copied ${copiedCount} new items, existing sessions untouched`);
         } else {
           execSync(`tar -xzf "${tempFile}" -C "${extractDir}"`, { timeout: 30000 });
         }
