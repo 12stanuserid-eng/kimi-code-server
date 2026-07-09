@@ -346,7 +346,6 @@
     }).then(function(r) { return r.json(); }).then(function(d) {
       if (saveBtn) saveBtn.disabled = false;
       if (d.success) {
-        loadProviders();
         clearForm();
         var msg = 'Saved!';
         if (d.models_discovered > 0) {
@@ -356,7 +355,14 @@
         } else {
           msg += ' No models found — click Rediscover to retry.';
         }
-        showStatus(msg, 'ok');
+        if (d.daemon_restarting) {
+          msg += ' Daemon restarting — refreshing in 5s...';
+          showStatus(msg, 'ok');
+          setTimeout(function() { loadProviders(); }, 5000);
+        } else {
+          showStatus(msg, 'ok');
+          loadProviders();
+        }
       } else {
         showStatus('Error: ' + (d.error || 'Unknown error'), 'bad');
       }
@@ -373,8 +379,13 @@
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d.success) {
-          loadProviders();
-          showStatus('Deleted! Daemon will restart to apply.', 'ok');
+          if (d.daemon_restarting) {
+            showStatus('Deleted! Daemon restarting — refreshing in 5s...', 'ok');
+            setTimeout(function() { loadProviders(); }, 5000);
+          } else {
+            loadProviders();
+            showStatus('Deleted!', 'ok');
+          }
         } else {
           showStatus('Error: ' + (d.error || '?'), 'bad');
         }
@@ -401,11 +412,17 @@
       .then(function(d) {
         if (targetBtn) { targetBtn.disabled = false; targetBtn.textContent = '↻ Rediscover'; }
         if (d.success) {
-          loadProviders();
           if (d.models_discovered > 0) {
-            showStatus('✅ Rediscovered ' + d.models_discovered + ' models for "' + id + '"!', 'ok');
+            if (d.daemon_restarting) {
+              showStatus('Rediscovered ' + d.models_discovered + ' models for "' + id + '"! Daemon restarting — refreshing in 5s...', 'ok');
+              setTimeout(function() { loadProviders(); }, 5000);
+            } else {
+              loadProviders();
+              showStatus('✅ Rediscovered ' + d.models_discovered + ' models for "' + id + '"!', 'ok');
+            }
           } else {
             showStatus(d.message || 'No models found. Check API key and base URL.', 'bad');
+            loadProviders();
           }
         } else {
           showStatus('Error: ' + (d.error || 'Unknown error'), 'bad');
