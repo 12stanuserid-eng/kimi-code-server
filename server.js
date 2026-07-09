@@ -220,42 +220,25 @@ function getTarCompressArgs() {
 }
 
 function pentaractLogin() {
-  // Retry up to 3 times with backoff — Cloudflare sometimes blocks from Render IPs
-  const MAX_ATTEMPTS = 3;
-  const BACKOFF_MS = [2000, 5000, 10000]; // 2s, 5s, 10s
-  let lastErr = null;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      // Use browser-like headers to reduce Cloudflare bot detection
-      const result = execSync(`curl -s --max-time 30 \
-        -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
-        -H "Accept: application/json, text/plain, */*" \
-        -H "Accept-Language: en-US,en;q=0.9" \
-        -H "Accept-Encoding: gzip, deflate, br" \
-        -H "Connection: keep-alive" \
-        -H "Origin: ${PENTARACT_URL}" \
-        -H "Referer: ${PENTARACT_URL}/" \
-        -X POST "${PENTARACT_URL}/api/auth/login" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "email=${encodeURIComponent(PENTARACT_EMAIL)}&password=${encodeURIComponent(PENTARACT_PASS)}"`, {
-        timeout: 30000, encoding: 'utf8'
-      });
-      if (result.trim().startsWith('<')) throw new Error('Got HTML instead of JSON (Cloudflare challenge)');
-      const data = JSON.parse(result);
-      if (!data.access_token) throw new Error('No access_token in response');
-      if (attempt > 1) log(`✅ Pentaract login succeeded on attempt ${attempt}`);
-      return data.access_token;
-    } catch (err) {
-      lastErr = err;
-      if (attempt < MAX_ATTEMPTS) {
-        log(`⚠️ Pentaract login attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message} — retrying in ${BACKOFF_MS[attempt-1]/1000}s`);
-        // Synchronous sleep using execSync with timeout
-        try { execSync(`sleep ${BACKOFF_MS[attempt-1] / 1000}`, { timeout: BACKOFF_MS[attempt-1] + 1000 }); } catch(e) {}
-      }
-    }
+  // Single attempt — no blocking retries (Cloudflare challenge is intermittent)
+  // Blocking retries freeze the event loop and cause WebSocket drops
+  try {
+    const result = execSync(`curl -s --max-time 15 \
+      -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
+      -H "Accept: application/json, text/plain, */*" \
+      -H "Accept-Language: en-US,en;q=0.9" \
+      -X POST "${PENTARACT_URL}/api/auth/login" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "email=${encodeURIComponent(PENTARACT_EMAIL)}&password=${encodeURIComponent(PENTARACT_PASS)}"`, {
+      timeout: 20000, encoding: 'utf8'
+    });
+    if (result.trim().startsWith('<')) throw new Error('Got HTML instead of JSON (Cloudflare challenge)');
+    const data = JSON.parse(result);
+    if (!data.access_token) throw new Error('No access_token in response');
+    return data.access_token;
+  } catch (err) {
+    throw new Error(`Pentaract login failed: ${err.message}`);
   }
-  throw new Error(`Pentaract login failed after ${MAX_ATTEMPTS} attempts: ${lastErr.message}`);
 }
 
 // ====== LOCAL BACKUP (always works, no network needed) ======
@@ -977,33 +960,32 @@ function checkAndRestore() {
 
   if (needsRestore) {
     log('🔄 Sessions missing — attempting restore...');
-    // Try local first
+    // Try local first (no blocking retries)
     const localBackup = getLatestLocalBackup();
     if (localBackup && localBackup.size >= 1000) {
       log(`📦 Found local backup: ${localBackup.name} (${(localBackup.size/1024).toFixed(1)}KB)`);
       if (restoreFromLocalBackup(localBackup.file)) {
-        log('🔄 Restarting daemon after local restore...');
-        restartKimiDaemon();
+        // Only restart if daemon is actually dead — don't disrupt active connections
+        if (!daemonAlive) {
+          log('🔄 Restarting daemon (was dead)...');
+          restartKimiDaemon();
+        } else {
+          log('✅ Restore done, daemon alive — no restart needed');
+        }
         return true;
       }
     }
-    // Fall back to Pentaract with retry (Cloudflare challenge is intermittent from Render)
-    const MAX_RESTORE_ATTEMPTS = 3;
-    const RESTORE_BACKOFF = [3000, 8000, 15000]; // 3s, 8s, 15s
-    for (let attempt = 1; attempt <= MAX_RESTORE_ATTEMPTS; attempt++) {
-      log(`🔄 Pentaract restore attempt ${attempt}/${MAX_RESTORE_ATTEMPTS}...`);
-      if (restoreFromPentaract()) {
-        try { performLocalBackup(); } catch (e) {}
-        log('🔄 Restarting daemon after Pentaract restore...');
+    // Pentaract — single attempt (no blocking retries that freeze event loop)
+    log('🔄 Pentaract restore attempt...');
+    if (restoreFromPentaract()) {
+      try { performLocalBackup(); } catch (e) {}
+      if (!daemonAlive) {
+        log('🔄 Restarting daemon (was dead)...');
         restartKimiDaemon();
-        return true;
       }
-      if (attempt < MAX_RESTORE_ATTEMPTS) {
-        log(`⏳ Waiting ${RESTORE_BACKOFF[attempt-1]/1000}s before next restore attempt...`);
-        try { execSync(`sleep ${RESTORE_BACKOFF[attempt-1] / 1000}`, { timeout: RESTORE_BACKOFF[attempt-1] + 1000 }); } catch(e) {}
-      }
+      return true;
     }
-    log('⚠️ All restore attempts failed — starting fresh (sessions will be created new)');
+    log('⚠️ Restore failed — sessions will be created new');
     return false;
   } else {
     log('✅ Sessions found locally');
@@ -1022,13 +1004,16 @@ function checkAndRestore() {
 }
 
 // ====== DELAYED RESTORE RETRIES ======
-// If initial restore fails (Cloudflare challenge), retry at increasing intervals
+// If initial restore fails, retry once after 5min (single attempt, no restart loops)
 function scheduleDelayedRestoreAttempts() {
-  const RETRY_DELAYS = [2 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000]; // 2min, 5min, 10min
-  let attempt = 0;
+  // Only retry ONCE after 5 minutes — multiple retries cause daemon restart loops
+  const RETRY_DELAY = 5 * 60 * 1000; // 5min
+  let attempted = false;
 
   function tryRestore() {
-    attempt++;
+    if (attempted) return; // already tried
+    attempted = true;
+
     // Check if sessions already exist (maybe another restore succeeded)
     const sessionsDir = path.join(KIMI_HOME, 'sessions');
     try {
@@ -1038,7 +1023,7 @@ function scheduleDelayedRestoreAttempts() {
           try {
             const itemPath = path.join(sessionsDir, item);
             if (fs.statSync(itemPath).isDirectory() && fs.readdirSync(itemPath).length > 0) {
-              log(`✅ Sessions already present — skipping delayed restore attempt ${attempt}`);
+              log(`✅ Sessions already present — skipping delayed restore`);
               return; // sessions exist, no need to restore
             }
           } catch (e) {}
@@ -1046,24 +1031,21 @@ function scheduleDelayedRestoreAttempts() {
       }
     } catch (e) {}
 
-    log(`🔄 Delayed restore attempt ${attempt}/${RETRY_DELAYS.length}...`);
+    log(`🔄 Delayed restore attempt (single retry after 5min)...`);
     if (restoreFromPentaract()) {
       try { performLocalBackup(); } catch (e) {}
-      log('🔄 Restarting daemon after delayed Pentaract restore...');
-      restartKimiDaemon();
-      return; // success, stop retrying
+      // Only restart if daemon is dead — don't disrupt active connections
+      if (!daemonAlive) {
+        log('🔄 Restarting daemon after delayed Pentaract restore...');
+        restartKimiDaemon();
+      }
+      return;
     }
-    if (attempt < RETRY_DELAYS.length) {
-      const delay = RETRY_DELAYS[attempt]; // attempt 0 already used first delay
-      log(`⏳ Next delayed restore in ${delay/1000}s...`);
-      setTimeout(tryRestore, delay);
-    } else {
-      log('⚠️ All delayed restore attempts exhausted — sessions will be created fresh');
-    }
+    log('⚠️ Delayed restore failed — sessions will be created fresh');
   }
 
-  log(`📅 Scheduled ${RETRY_DELAYS.length} delayed restore attempts (2min, 5min, 10min)`);
-  setTimeout(tryRestore, RETRY_DELAYS[0]);
+  log(`📅 Scheduled single delayed restore in ${RETRY_DELAY/1000}s`);
+  setTimeout(tryRestore, RETRY_DELAY);
 }
 
 function startBackupScheduler() {
