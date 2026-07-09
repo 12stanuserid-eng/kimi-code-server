@@ -26,6 +26,7 @@ try { require('./setup.js'); } catch(e) { console.error('Setup fallback error:',
 
 let debugLog = [];
 let daemonAlive = false;
+let daemonFailCount = 0; // consecutive health check failures before marking dead
 let myPublicUrl = null;
 let kimiProc = null;
 let restartTimer = null;
@@ -60,12 +61,32 @@ const STARTING_HTML = `<!DOCTYPE html><html><head>
 <script>setTimeout(()=>location.reload(),5000)</script></div></body></html>`;
 
 // ====== TCP HEALTH CHECK ======
+// Uses consecutive failure count to avoid flipping daemonAlive on transient errors
 function checkDaemon() {
   const sock = new net.Socket();
   sock.setTimeout(3000);
-  sock.on('connect', () => { sock.destroy(); daemonAlive = true; });
-  sock.on('error', () => { sock.destroy(); daemonAlive = false; });
-  sock.on('timeout', () => { sock.destroy(); daemonAlive = false; });
+  sock.on('connect', () => {
+    sock.destroy();
+    daemonFailCount = 0;
+    if (!daemonAlive) log('✅ Daemon health check passed — marking alive');
+    daemonAlive = true;
+  });
+  sock.on('error', () => {
+    sock.destroy();
+    daemonFailCount++;
+    if (daemonFailCount >= 2 && daemonAlive) {
+      log(`⚠️ Daemon health check failed ${daemonFailCount}x — marking dead`);
+      daemonAlive = false;
+    }
+  });
+  sock.on('timeout', () => {
+    sock.destroy();
+    daemonFailCount++;
+    if (daemonFailCount >= 2 && daemonAlive) {
+      log(`⚠️ Daemon health check timed out ${daemonFailCount}x — marking dead`);
+      daemonAlive = false;
+    }
+  });
   sock.connect(KIMI_PORT, '127.0.0.1');
 }
 
@@ -2029,19 +2050,41 @@ const server = http.createServer((req, res) => {
       }
     });
 
-    pr.on('error', () => {
+    pr.on('error', (err) => {
       daemonAlive = false;
-      res.writeHead(200, {'Content-Type': 'text/html'});
-      res.end(STARTING_HTML);
+      log(`⚠️ Proxy error: ${err.message}`);
+      // For API requests, return JSON error instead of HTML
+      if (req.url && req.url.startsWith('/api/')) {
+        res.writeHead(503, {'Content-Type': 'application/json'});
+        res.end(JSON.stringify({
+          code: 50001,
+          msg: 'Kimi daemon is restarting. Please try again in a few seconds.',
+          data: null,
+          request_id: req.headers['x-request-id'] || null
+        }));
+      } else {
+        res.writeHead(200, {'Content-Type': 'text/html'});
+        res.end(STARTING_HTML);
+      }
     });
 
     req.pipe(pr);
     return;
   }
 
-  // Not ready yet
-  res.writeHead(200, {'Content-Type': 'text/html'});
-  res.end(STARTING_HTML);
+  // Not ready yet — serve HTML for page requests, JSON for API requests
+  if (req.url && req.url.startsWith('/api/')) {
+    res.writeHead(503, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({
+      code: 50001,
+      msg: 'Kimi daemon is starting up. Please try again in a few seconds.',
+      data: null,
+      request_id: req.headers['x-request-id'] || null
+    }));
+  } else {
+    res.writeHead(200, {'Content-Type': 'text/html'});
+    res.end(STARTING_HTML);
+  }
 });
 
 // ====== Session Reconnect Grace — keeps daemon socket alive on page refresh ======
