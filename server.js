@@ -132,14 +132,37 @@ function ensureFixedToken() {
 
 // ====== START KIMI ======
 function startKimi() {
-  // When using an external daemon (port != PORT+1), don't spawn a new one
-  if (KIMI_PORT !== PORT + 1) {
-    log(`Using external daemon on 127.0.0.1:${KIMI_PORT} — skipping spawn`);
-    daemonAlive = true;
-    // Fire immediate health check
-    setTimeout(checkDaemon, 2000);
-    return;
+  // First check if an external daemon is already listening on KIMI_PORT
+  // This handles both localhost (where daemon runs on :58630) and Render/RHEL environments
+  try {
+    const sock = new net.Socket();
+    sock.setTimeout(2000);
+    let externalFound = false;
+    sock.on('connect', () => {
+      sock.destroy();
+      externalFound = true;
+      log(`External daemon found on 127.0.0.1:${KIMI_PORT} — skipping spawn`);
+      daemonAlive = true;
+      setTimeout(checkDaemon, 2000);
+    });
+    sock.on('error', () => { sock.destroy(); });
+    sock.on('timeout', () => { sock.destroy(); });
+    sock.connect(KIMI_PORT, '127.0.0.1');
+    // Wait up to 2.5s for the check, then proceed
+    setTimeout(() => {
+      if (!externalFound) {
+        log(`No daemon on 127.0.0.1:${KIMI_PORT} — will spawn our own`);
+        spawnKimiProcess();
+      }
+    }, 2500);
+    return; // spawned either way via the timeout above
+  } catch(e) {
+    log(`Daemon detection error: ${e.message} — spawning own`);
   }
+  spawnKimiProcess();
+}
+
+function spawnKimiProcess() {
   // Ensure fixed token before starting kimi
   ensureFixedToken();
   // Find kimi binary
@@ -1509,44 +1532,44 @@ function restartKimiDaemon() {
   // Always regenerate session_index.jsonl before restart so daemon picks up latest sessions
   try { ensureWorkspaceMapping(); regenerateSessionIndex(); } catch(e) {}
 
-  // Case 1: We spawned the daemon — kill and let it auto-restart
+  // Case 1: We spawned the daemon — kill old process and spawn new one directly
   if (kimiProc && !kimiProc.killed) {
-    log('🔄 Restarting Kimi daemon (SIGTERM)...');
+    log('🔄 Restarting Kimi daemon (kill + respawn)...');
     daemonAlive = false;
-    kimiProc.kill('SIGTERM');
+    // Remove listeners so the exit handler doesn't call scheduleRestart (we're respawning now)
+    try { kimiProc.removeAllListeners('exit'); } catch(e) {}
+    try { kimiProc.kill('SIGTERM'); } catch(e) {}
+    // Wait briefly for port to be released, then spawn fresh
+    setTimeout(() => { spawnKimiProcess(); }, 2000);
     return true;
   }
 
-  // Case 2: External daemon (KIMI_PORT !== PORT+1) — use 'kimi server kill' (graceful stop),
-  // the bash wrapper (PID 7324) auto-restarts the node process after SIGTERM
+  // Case 2: External daemon — use 'kimi server kill' (only works when daemon is installed)
+  // This is primarily for the localhost setup where daemon is managed externally
   try {
-    log(`🔄 Restarting external daemon on ${KIMI_PORT} via 'kimi server kill'...`);
-    const kimiBin = process.env['KIMI_CODE_BIN'] || '/root/.kimi-code/bin/kimi';
-    execSync(`${kimiBin} server kill`, { timeout: 15000, stdio: 'pipe' });
-    log('✅ kimi server kill sent — bash wrapper will auto-restart');
+    // Try to find kimi binary (npm or system)
+    const kimiBin = (() => {
+      try { return execSync('which kimi 2>/dev/null', { encoding: 'utf8', timeout: 3000 }).trim(); } catch(e) {}
+      const p = path.join(__dirname, 'node_modules', '.bin', 'kimi');
+      try { if (fs.existsSync(p)) return p; } catch(e) {}
+      return 'npx --yes @moonshot-ai/kimi-code';
+    })();
+    log(`🔄 Restarting external daemon on ${KIMI_PORT} via '${kimiBin} server kill'...`);
+    if (kimiBin.startsWith('npx')) {
+      execSync(`${kimiBin} server kill`, { timeout: 15000, stdio: 'pipe' });
+    } else {
+      execSync(`"${kimiBin}" server kill`, { timeout: 15000, stdio: 'pipe' });
+    }
+    log('✅ kimi server kill sent — will wait for daemon to restart');
     daemonAlive = false;
-    // wallet for daemon to restart and re-read session index + config
     setTimeout(checkDaemon, 5000);
     return true;
   } catch (e) {
     log(`⚠️ 'kimi server kill' failed: ${e.message}`);
-    // Fallback: send SIGTERM directly to the node process (child of bash wrapper)
-    try {
-      const pidResult = execSync(`pgrep -P 7324 -x node || true`, { timeout: 5000, encoding: 'utf8' });
-      const nodePids = pidResult.trim().split('\n').filter(Boolean);
-      if (nodePids.length > 0) {
-        const targetPid = nodePids[0];
-        log(`📡 Sending SIGTERM to node PID ${targetPid} (bash wrapper will auto-restart)...`);
-        execSync(`kill ${targetPid}`, { timeout: 2000 });
-        daemonAlive = false;
-        setTimeout(checkDaemon, 5000);
-        return true;
-      }
-    } catch (e2) {
-      log(`⚠️ SIGTERM to node process also failed: ${e2.message}`);
-    }
-    log('⚠️ Could not restart daemon automatically. Config saved to disk for next daemon restart.');
-    return false;
+    // If we can't kill via command, try spawning our own daemon
+    log('🔄 Falling back to spawning our own kimi daemon...');
+    spawnKimiProcess();
+    return true;
   }
 }
 
