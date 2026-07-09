@@ -2029,7 +2029,7 @@ const server = http.createServer((req, res) => {
           } else {
             wsRedirect = '<!-- WS direct: tunnel not available -->';
           }
-          const settingsPanelScript = '<link rel="stylesheet" href="/kimi-admin/panel.css?v=2"><script src="/kimi-admin/panel.js?v=2"></script>';
+          const settingsPanelScript = '<link rel="stylesheet" href="/kimi-admin/panel.css"><script src="/kimi-admin/panel.js"></script>';
           const allScripts = wsScript + '\n' + wsRedirect + '\n' + settingsPanelScript;
           if (html.includes('</body>')) html = html.replace('</body>', allScripts + '\n</body>');
           else if (html.includes('</html>')) html = html.replace('</html>', allScripts + '\n</html>');
