@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Kimi Code Render Server v6 — Tunnel + WebSocket Fix 🚇
- * - Uses `kimi server run --foreground` (no daemon mode — process stays alive)
+ * - Uses `kimi server run` (no daemon mode — process stays alive)
  * - Forces KIMI_CODE_PASSWORD if not set in env
  * - Auto-restarts Kimi on crash with exponential backoff
  * - Proper daemonAlive tracking
@@ -156,7 +156,7 @@ function startKimi() {
     KIMI_CODE_CORS_ORIGINS: 'https://kimicode.dpdns.org,https://kimi-code-server.onrender.com',
   };
 
-  // Use `server run --foreground` — never daemonizes, process stays alive
+  // Use `server run` — never daemonizes, process stays alive
   const args = kimiBin === 'npx'
     ? ['@moonshot-ai/kimi-code', 'server', 'run', '--daemon', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--insecure-no-tls']
     : ['server', 'run', '--daemon', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--insecure-no-tls'];
