@@ -1987,7 +1987,8 @@ const server = http.createServer((req, res) => {
       headers: {
         ...req.headers,
         host: `127.0.0.1:${KIMI_PORT}`,
-        'connection': 'close'
+        'connection': 'close',
+        'authorization': `Bearer ${FIXED_TOKEN}`  // Inject daemon auth token for API auth
       }
     };
 
