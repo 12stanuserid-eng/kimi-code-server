@@ -677,6 +677,36 @@ max_context_size = 32000
 provider = "cloudflare"
 model = "@cf/mistral/mistral-7b-instruct-v0.3"
 max_context_size = 16000
+
+[models."nvidia-moonshotai_kimi-k2_6"]
+provider = "nvidia-moonshotai"
+model = "nvidia/moonshotai/kimi-k2-6"
+max_context_size = 16000
+
+[models."nvidia-llama-3-1-nemotron-ultra-253b-v1"]
+provider = "nvidia"
+model = "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+max_context_size = 32000
+
+[models."nvidia-mistral-nemo-minitron-8b-8k"]
+provider = "nvidia"
+model = "nvidia/mistral-nemo-minitron-8b-8k"
+max_context_size = 32000
+
+[models."nvidia-deepseek-r1"]
+provider = "nvidia"
+model = "deepseek-ai/deepseek-r1"
+max_context_size = 16000
+
+[models."nvidia-llama-3-3-nemotron-super-49b-v1"]
+provider = "nvidia"
+model = "nvidia/llama-3.3-nemotron-super-49b-v1"
+max_context_size = 32000
+
+[models."nvidia-mistralai-mistral-nemo-12b-instruct"]
+provider = "nvidia"
+model = "mistralai/mistral-nemo-12b-instruct"
+max_context_size = 32000
 `;
 
 fs.writeFileSync(configPath, config);

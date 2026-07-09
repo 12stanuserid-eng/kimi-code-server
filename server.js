@@ -517,8 +517,9 @@ function restoreFromPentaract() {
     if (listResult.trim().startsWith('<')) throw new Error('Cloudflare challenge on list');
     const data = JSON.parse(listResult);
     if (!data.files || data.files.length === 0) { log('ℹ️ No remote backups found'); return false; }
-    // Filter to only tar.gz files — skip tiny (< 3KB = config-only) and huge (> 5MB = OOM risk on free tier)
-    const backups = data.files.filter(f => f.path.endsWith('.tar.gz') && f.size > 3000 && f.size < 5000000);
+    // Filter to only tar.gz files — skip tiny (< 3KB = config-only), allow up to 100MB
+    const backups = data.files.filter(f => f.path.endsWith('.tar.gz') && f.size > 3000 && f.size < 100000000);
+    if (data.files.length > backups.length) log(`⚠️ Filtered out ${data.files.length - backups.length} backup files (size limits)`);
     if (backups.length === 0) { log('ℹ️ No valid backup files found'); return false; }
     // Sort by SIZE DESCENDING (largest first — most sessions, most complete backup)
     // This ensures we pick the clean/full backup (52KB) over partial ones (24KB)
@@ -557,8 +558,32 @@ function restoreFromPentaract() {
               if (item === 'config.toml') continue; // preserve existing
               const src = path.join(extractedHome, item);
               const dst = path.join(KIMI_HOME, item);
-              fs.cpSync(src, dst, { recursive: true });
-              log(`  Restored: ${item}`);
+              // MERGE mode: skip existing items (never overwrite current sessions/states)
+              if (fs.existsSync(dst)) {
+                // For session dirs, skip entirely — don't overwrite with older backup
+                if (item === 'sessions' || item === 'workspaces.json' || item === 'workspace_index.json') {
+                  log(`  Skipped ${item} — already exists (preserving current state)`);
+                  continue;
+                }
+                // For other items, only merge contents without replacing dirs
+                if (fs.statSync(src).isDirectory() && fs.statSync(dst).isDirectory()) {
+                  for (const sub of fs.readdirSync(src)) {
+                    const subSrc = path.join(src, sub);
+                    const subDst = path.join(dst, sub);
+                    if (!fs.existsSync(subDst)) {
+                      fs.cpSync(subSrc, subDst, { recursive: true });
+                      log(`  Merged: ${item}/${sub}`);
+                    } else {
+                      log(`  Skipped: ${item}/${sub} (already exists)`);
+                    }
+                  }
+                } else {
+                  log(`  Skipped: ${item} (already exists)`);
+                }
+              } else {
+                fs.cpSync(src, dst, { recursive: true });
+                log(`  Restored: ${item}`);
+              }
             }
           } else {
             log(`⚠️ Extracted home not found: ${extractedHome}`);
@@ -739,7 +764,7 @@ function regenerateSessionIndex() {
         } else if (wsType === 'root') {
           workDir = '/root'; // Local machine
         } else if (wsType === '.kimi-code' || wsType === 'kimi-code') {
-          workDir = KIMI_HOME;
+          workDir = path.dirname(KIMI_HOME);
         } else {
           workDir = currentWorkDir; // generic fallback
         }
@@ -932,7 +957,7 @@ function ensureWorkspaceMapping() {
       } else if (wsType === 'root') {
         workDir = '/root';
       } else if (wsType === '.kimi-code' || wsType === 'kimi-code') {
-        workDir = KIMI_HOME;
+        workDir = path.dirname(KIMI_HOME);
       } else {
         workDir = renderHome;
       }
@@ -960,6 +985,7 @@ function ensureWorkspaceMapping() {
 function checkAndRestore() {
   const sessionsDir = path.join(KIMI_HOME, 'sessions');
   let needsRestore = false;
+  let totalSessionCount = 0;
   try {
     if (fs.existsSync(sessionsDir)) {
       const items = fs.readdirSync(sessionsDir);
@@ -969,11 +995,14 @@ function checkAndRestore() {
         for (const item of items) {
           try {
             const itemPath = path.join(sessionsDir, item);
-            if (fs.statSync(itemPath).isDirectory() && fs.readdirSync(itemPath).length > 0) {
-              hasSessions = true; break;
+            if (fs.statSync(itemPath).isDirectory()) {
+              const sess = fs.readdirSync(itemPath);
+              totalSessionCount += sess.length;
+              if (sess.length > 0) hasSessions = true;
             }
           } catch (e) {}
         }
+        // Only restore if truly empty — existing sessions must NEVER be deleted
         if (!hasSessions) needsRestore = true;
       }
     } else { needsRestore = true; }
@@ -986,7 +1015,6 @@ function checkAndRestore() {
     if (localBackup && localBackup.size >= 1000) {
       log(`📦 Found local backup: ${localBackup.name} (${(localBackup.size/1024).toFixed(1)}KB)`);
       if (restoreFromLocalBackup(localBackup.file)) {
-        // Only restart if daemon is actually dead — don't disrupt active connections
         if (!daemonAlive) {
           log('🔄 Restarting daemon (was dead)...');
           restartKimiDaemon();
@@ -1009,15 +1037,12 @@ function checkAndRestore() {
     log('⚠️ Restore failed — sessions will be created new');
     return false;
   } else {
-    log('✅ Sessions found locally');
-    // Verify session index is healthy
+    log(`✅ ${totalSessionCount} sessions found locally in ${fs.readdirSync(sessionsDir).length} workspaces, skipping full restore`);
+    // ALWAYS regenerate session index to ensure all sessions appear in UI
     const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
     try {
-      if (!fs.existsSync(indexPath) || fs.readFileSync(indexPath, 'utf8').trim().length === 0) {
-        log('⚠️ Session index missing or empty — regenerating...');
-        ensureWorkspaceMapping();
-        regenerateSessionIndex();
-      }
+      ensureWorkspaceMapping();
+      regenerateSessionIndex();
     } catch(e) {}
     try { performLocalBackup(); } catch (e) {}
     return true;
