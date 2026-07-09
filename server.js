@@ -1443,6 +1443,69 @@ function restartKimiDaemon() {
   return false;
 }
 
+// ====== AUTO-DISCOVER MODELS ON STARTUP ======
+// After restore, providers may exist in config.toml but with 0 models.
+// This function auto-discovers models for any provider with 0 models,
+// so the model selector works without manually clicking "Rediscover".
+async function autoDiscoverModelsOnStartup() {
+  log('🔍 Auto-discover: checking providers for missing models...');
+  const providers = readProvidersFromConfig();
+  const providerIds = Object.keys(providers);
+
+  if (providerIds.length === 0) {
+    log('🔍 Auto-discover: no providers found in config.toml — skipping');
+    return;
+  }
+
+  // Count models per provider from config.toml
+  let configLines = [];
+  try { configLines = fs.readFileSync(getConfigPath(), 'utf8').split('\n'); } catch(e) {}
+  const modelCounts = {};
+  for (const pid of providerIds) {
+    modelCounts[pid] = 0;
+    for (const line of configLines) {
+      if (line.includes('[models.') && line.includes(pid + '-')) {
+        modelCounts[pid]++;
+      }
+    }
+  }
+
+  const needsDiscovery = providerIds.filter(pid => modelCounts[pid] === 0);
+  if (needsDiscovery.length === 0) {
+    log(`🔍 Auto-discover: all ${providerIds.length} providers already have models — nothing to do`);
+    return;
+  }
+
+  log(`🔍 Auto-discover: ${needsDiscovery.length}/${providerIds.length} providers need model discovery`);
+  let anyAdded = false;
+
+  for (const pid of needsDiscovery) {
+    const p = providers[pid];
+    if (!p.baseUrl) {
+      log(`⚠️ Auto-discover: "${pid}" has no base_url — skipping`);
+      continue;
+    }
+    try {
+      log(`🔍 Auto-discover: fetching models for "${pid}" from ${p.baseUrl}`);
+      const models = await fetchModels(p.baseUrl, p.apiKey || '');
+      if (models && models.length > 0) {
+        writeModelsForProvider(getConfigPath(), pid, models);
+        log(`✅ Auto-discover: "${pid}" — ${models.length} models discovered and saved`);
+        anyAdded = true;
+      } else {
+        log(`⚠️ Auto-discover: "${pid}" — 0 models returned from API`);
+      }
+    } catch (e) {
+      log(`⚠️ Auto-discover: "${pid}" failed — ${e.message}`);
+    }
+  }
+
+  if (anyAdded) {
+    log('🔄 Auto-discover: restarting daemon to pick up new models...');
+    restartKimiDaemon();
+  }
+}
+
 // ====== HTTP SERVER ======
 const server = http.createServer((req, res) => {
   // Record public URL from first external request
@@ -2210,6 +2273,9 @@ server.listen(PORT, '0.0.0.0', () => {
     if (!restored) {
       scheduleDelayedRestoreAttempts();
     }
+    // Auto-discover models for providers with 0 models (runs after restore)
+    // Delay 30s to let daemon fully initialize after restore/restart
+    setTimeout(() => { autoDiscoverModelsOnStartup().catch(e => log(`⚠️ Auto-discover error: ${e.message}`)); }, 30000);
   }, 20000);
 });
 
