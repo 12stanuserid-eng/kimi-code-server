@@ -18,11 +18,16 @@ const os = require('os');
 const crypto = require('crypto');
 
 const PORT = parseInt(process.env.PORT) || 10000;
-const KIMI_PORT = PORT + 1;
+// Use the already-running daemon on 58630 instead of spawning our own
+const KIMI_PORT = parseInt(process.env.KIMI_PORT) || 58630;
 const RESTART_DELAY_MS = 5000;
 
 // Run setup.js as fallback (ensures config.toml exists, safe to call multiple times)
-try { require('./setup.js'); } catch(e) { console.error('Setup fallback error:', e.message); }
+// Run as child process instead of require to avoid process.exit(0) killing us
+try {
+  const cp = require('child_process');
+  cp.execSync('node ' + path.join(__dirname, 'setup.js'), { timeout: 15000, stdio: 'pipe' });
+} catch(e) { /* setup may exit non-zero, that's ok */ }
 
 let debugLog = [];
 let daemonAlive = false;
@@ -127,6 +132,14 @@ function ensureFixedToken() {
 
 // ====== START KIMI ======
 function startKimi() {
+  // When using an external daemon (port != PORT+1), don't spawn a new one
+  if (KIMI_PORT !== PORT + 1) {
+    log(`Using external daemon on 127.0.0.1:${KIMI_PORT} — skipping spawn`);
+    daemonAlive = true;
+    // Fire immediate health check
+    setTimeout(checkDaemon, 2000);
+    return;
+  }
   // Ensure fixed token before starting kimi
   ensureFixedToken();
   // Find kimi binary
@@ -1492,13 +1505,47 @@ function restartKimiDaemon() {
     return false;
   }
   lastRestartTime = now;
+
+  // Case 1: We spawned the daemon — kill and let it auto-restart
   if (kimiProc && !kimiProc.killed) {
     log('🔄 Restarting Kimi daemon (SIGTERM)...');
     daemonAlive = false;
     kimiProc.kill('SIGTERM');
     return true;
   }
-  return false;
+
+  // Case 2: External daemon (KIMI_PORT !== PORT+1) — use command to restart
+  try {
+    log(`🔄 Restarting external daemon on ${KIMI_PORT} via 'kimi server restart'...`);
+    const kimiBin = process.env['KIMI_CODE_BIN'] || 'kimi';
+    execSync(`${kimiBin} server restart --port ${KIMI_PORT}`, { timeout: 10000, stdio: 'pipe' });
+    log('✅ External daemon restart command sent');
+    // Mark daemon as temporarily down — health check will pick it up
+    daemonAlive = false;
+    // Re-check after 5s
+    setTimeout(checkDaemon, 5000);
+    return true;
+  } catch (e) {
+    log(`⚠️ External daemon restart command failed: ${e.message}`);
+    // If kimi command not found, try SIGHUP (daemons often reload on SIGHUP)
+    try {
+      // Find the daemon PID (the bash wrapper PID is 7324, child is node)
+      const pidResult = execSync(`pgrep -f "kimi-code.*server.*run.*port ${KIMI_PORT}" || pgrep -f "kimi.*server.*run" || true`, { timeout: 5000, encoding: 'utf8' });
+      const pids = pidResult.trim().split('\n').filter(Boolean);
+      if (pids.length > 0) {
+        const targetPid = pids[0];
+        log(`📡 Sending SIGHUP to daemon PID ${targetPid} for config reload...`);
+        execSync(`kill -HUP ${targetPid}`, { timeout: 2000 });
+        log('✅ SIGHUP sent — daemon should reload config');
+        return true;
+      }
+    } catch (e2) {
+      log(`⚠️ SIGHUP also failed: ${e2.message}`);
+    }
+    // Config was still written to disk — user just needs to manually restart
+    log('⚠️ Could not restart daemon automatically. Config saved to disk for next daemon restart.');
+    return false;
+  }
 }
 
 // ====== AUTO-DISCOVER MODELS ON STARTUP ======
@@ -1990,7 +2037,20 @@ const server = http.createServer((req, res) => {
   }
 
 
-  // ====== Admin Panel Static Files ======
+  // ====== Chat UI Static Files (new SPA) ======
+  if (req.url === '/kimi-admin/chat-ui.js' && req.method === 'GET') {
+    res.writeHead(200, {'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache'});
+    return res.end(fs.readFileSync(path.join(__dirname, 'public', 'chat-ui.js'), 'utf8'));
+  }
+  if (req.url === '/kimi-admin/chat-ui.css' && req.method === 'GET') {
+    res.writeHead(200, {'Content-Type': 'text/css', 'Cache-Control': 'no-cache'});
+    return res.end(fs.readFileSync(path.join(__dirname, 'public', 'chat-ui.css'), 'utf8'));
+  }
+  if (req.url === '/kimi-admin/chat-ui.html' && req.method === 'GET') {
+    res.writeHead(200, {'Content-Type': 'text/html', 'Cache-Control': 'no-cache'});
+    return res.end(fs.readFileSync(path.join(__dirname, 'public', 'chat-ui.html'), 'utf8'));
+  }
+  // ====== Admin Panel Static Files (backward compat) ======
   if (req.url === '/kimi-admin/panel.js' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache'});
     return res.end(fs.readFileSync(path.join(__dirname, 'public', 'panel.js'), 'utf8'));
@@ -1998,6 +2058,26 @@ const server = http.createServer((req, res) => {
   if (req.url === '/kimi-admin/panel.css' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type': 'text/css', 'Cache-Control': 'no-cache'});
     return res.end(fs.readFileSync(path.join(__dirname, 'public', 'panel.css'), 'utf8'));
+  }
+
+  // ====== PWA Manifest ======
+  if (req.url === '/kimi-admin/manifest.json' && req.method === 'GET') {
+    const manifest = {
+      name: 'Kimi Code',
+      short_name: 'Kimi Code',
+      description: 'AI-powered coding assistant',
+      start_url: '/',
+      display: 'standalone',
+      background_color: '#0d1117',
+      theme_color: '#0d1117',
+      icons: [{
+        src: '/favicon.ico',
+        sizes: '64x64',
+        type: 'image/x-icon'
+      }]
+    };
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    return res.end(JSON.stringify(manifest));
   }
 
   // ====== Tunnel Status Endpoint ======
@@ -2067,8 +2147,10 @@ const server = http.createServer((req, res) => {
           } else {
             wsRedirect = '<!-- WS direct: tunnel not available -->';
           }
-          const settingsPanelScript = '<link rel="stylesheet" href="/kimi-admin/panel.css"><script src="/kimi-admin/panel.js"></script>';
-          const allScripts = wsScript + '\n' + wsRedirect + '\n' + settingsPanelScript;
+          // Replace: inject the new chat UI overlay instead of the old provider panel
+          // The chat UI is a full SPA that hides the original Vue app and renders its own
+          const chatUIScript = '<link rel="stylesheet" href="/kimi-admin/chat-ui.css"><script src="/kimi-admin/chat-ui.js"></script>';
+          const allScripts = wsScript + '\n' + wsRedirect + '\n' + chatUIScript;
           if (html.includes('</body>')) html = html.replace('</body>', allScripts + '\n</body>');
           else if (html.includes('</html>')) html = html.replace('</html>', allScripts + '\n</html>');
           else html += allScripts;
