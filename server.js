@@ -158,8 +158,8 @@ function startKimi() {
 
   // Use `server run --foreground` — never daemonizes, process stays alive
   const args = kimiBin === 'npx'
-    ? ['@moonshot-ai/kimi-code', 'server', 'run', '--foreground', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--insecure-no-tls']
-    : ['server', 'run', '--foreground', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--insecure-no-tls'];
+    ? ['@moonshot-ai/kimi-code', 'server', 'run', '--daemon', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--insecure-no-tls']
+    : ['server', 'run', '--daemon', '--port', String(KIMI_PORT), '--host', '0.0.0.0', '--insecure-no-tls'];
 
   log(`Starting Kimi: ${kimiBin} ${args.join(' ')}`);
   log(`KIMI_CODE_PASSWORD: ${kimiEnv.KIMI_CODE_PASSWORD ? 'SET ✓' : 'NOT SET'}`);
