@@ -74,7 +74,7 @@ function checkDaemon() {
   sock.on('error', () => {
     sock.destroy();
     daemonFailCount++;
-    if (daemonFailCount >= 2 && daemonAlive) {
+    if (daemonFailCount >= 4 && daemonAlive) {
       log(`⚠️ Daemon health check failed ${daemonFailCount}x — marking dead`);
       daemonAlive = false;
     }
@@ -82,7 +82,7 @@ function checkDaemon() {
   sock.on('timeout', () => {
     sock.destroy();
     daemonFailCount++;
-    if (daemonFailCount >= 2 && daemonAlive) {
+    if (daemonFailCount >= 4 && daemonAlive) {
       log(`⚠️ Daemon health check timed out ${daemonFailCount}x — marking dead`);
       daemonAlive = false;
     }
@@ -701,7 +701,11 @@ function fixSessionHomedirPaths() {
           }
           if (entry.workDir && entry.workDir.startsWith('/root')) {
             const renderHome = path.dirname(KIMI_HOME);
-            entry.workDir = entry.workDir.replace('/root', renderHome);
+            if (entry.workDir === '/root') {
+              entry.workDir = renderHome;
+            } else {
+              entry.workDir = entry.workDir.replace(/^\/root\//, renderHome + '/');
+            }
             changed = true;
           }
           if (changed) idxFixed++;
@@ -770,7 +774,7 @@ function regenerateSessionIndex() {
         if (wsType === 'render' || wsType === 'tmp') {
           workDir = path.join(currentWorkDir, 'project', 'src'); // Render workspace
         } else if (wsType === 'root') {
-          workDir = '/root'; // Local machine
+          workDir = currentWorkDir; // Use currentWorkDir (path.dirname(KIMI_HOME)) — not hardcoded /root
         } else if (wsType === '.kimi-code' || wsType === 'kimi-code') {
           workDir = path.dirname(KIMI_HOME);
         } else {
@@ -963,7 +967,7 @@ function ensureWorkspaceMapping() {
       if (wsType === 'render' || wsType === 'tmp') {
         workDir = currentWorkDir;
       } else if (wsType === 'root') {
-        workDir = '/root';
+        workDir = renderHome; // Use renderHome (path.dirname(KIMI_HOME)) — not hardcoded /root
       } else if (wsType === '.kimi-code' || wsType === 'kimi-code') {
         workDir = path.dirname(KIMI_HOME);
       } else {
