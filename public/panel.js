@@ -337,21 +337,31 @@
     if (!url) { showStatus('Base URL is required', 'bad'); return; }
     var body = JSON.stringify({ id: id, type: 'openai', base_url: url, api_key: key });
     showStatus('Connecting to provider and discovering models...', 'wait');
+    var saveBtn = document.getElementById('ks-save-btn');
+    if (saveBtn) saveBtn.disabled = true;
     fetch('/kimi-admin/providers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body
     }).then(function(r) { return r.json(); }).then(function(d) {
+      if (saveBtn) saveBtn.disabled = false;
       if (d.success) {
         loadProviders();
         clearForm();
-        showStatus('Saved! ' + (d.models_discovered > 0 ? d.models_discovered + ' models found.' : 'Page will reload to apply.'), 'ok');
-        // Auto-reload after save to pick up new models
-        setTimeout(function() { location.reload(); }, 3000);
+        var msg = 'Saved!';
+        if (d.models_discovered > 0) {
+          msg += ' ' + d.models_discovered + ' models discovered.';
+        } else if (d.model_fetch_error) {
+          msg += ' Model discovery failed — click Rediscover to retry.';
+        } else {
+          msg += ' No models found — click Rediscover to retry.';
+        }
+        showStatus(msg, 'ok');
       } else {
         showStatus('Error: ' + (d.error || 'Unknown error'), 'bad');
       }
     }).catch(function(e) {
+      if (saveBtn) saveBtn.disabled = false;
       showStatus('Error: ' + e.message, 'bad');
     });
   }
@@ -364,8 +374,7 @@
       .then(function(d) {
         if (d.success) {
           loadProviders();
-          showStatus('Deleted! Reloading to apply...', 'ok');
-          setTimeout(function() { location.reload(); }, 3000);
+          showStatus('Deleted! Daemon will restart to apply.', 'ok');
         } else {
           showStatus('Error: ' + (d.error || '?'), 'bad');
         }
@@ -376,13 +385,25 @@
   // ====== REDISCOVER ======
   function rediscoverModels(id) {
     showStatus('Rediscovering models for "' + id + '"... This may take up to 30s.', 'wait');
+    // Find and disable the rediscover button for this provider
+    var allBtns = document.querySelectorAll('[data-action="rediscover"]');
+    var targetBtn = null;
+    for (var i = 0; i < allBtns.length; i++) {
+      if (allBtns[i].getAttribute('data-id') === id) {
+        targetBtn = allBtns[i];
+        targetBtn.disabled = true;
+        targetBtn.textContent = '⏳ Discovering...';
+        break;
+      }
+    }
     fetch('/kimi-admin/providers/' + encodeURIComponent(id) + '/rediscover', { method: 'POST' })
       .then(function(r) { return r.json(); })
       .then(function(d) {
+        if (targetBtn) { targetBtn.disabled = false; targetBtn.textContent = '↻ Rediscover'; }
         if (d.success) {
           loadProviders();
           if (d.models_discovered > 0) {
-            showStatus('Rediscovered ' + d.models_discovered + ' models! Reloading...', 'ok');
+            showStatus('✅ Rediscovered ' + d.models_discovered + ' models for "' + id + '"!', 'ok');
           } else {
             showStatus(d.message || 'No models found. Check API key and base URL.', 'bad');
           }
@@ -390,7 +411,10 @@
           showStatus('Error: ' + (d.error || 'Unknown error'), 'bad');
         }
       })
-      .catch(function(e) { showStatus('Error: ' + e.message, 'bad'); });
+      .catch(function(e) {
+        if (targetBtn) { targetBtn.disabled = false; targetBtn.textContent = '↻ Rediscover'; }
+        showStatus('Error: ' + e.message, 'bad');
+      });
   }
 
   // ====== CLEAR FORM ======

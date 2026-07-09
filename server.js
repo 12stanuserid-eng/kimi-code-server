@@ -1714,22 +1714,24 @@ const server = http.createServer((req, res) => {
 
           log(`🔧 Admin API: ${data.id} provider ${readProvidersFromConfig()[data.id] ? 'updated' : 'added'}`);
 
-          // Step 4: Auto-restart daemon to pick up config changes
-          const restarted = restartKimiDaemon();
-          log(`🔄 Auto-restart after provider "${data.id}" save: ${restarted ? 'initiated' : 'daemon not running'}`);
+          // Step 4: Auto-restart daemon to pick up config changes (delayed 3s so frontend can show success)
+          setTimeout(() => {
+            const restarted = restartKimiDaemon();
+            log(`🔄 Auto-restart after provider "${data.id}" save: ${restarted ? 'initiated' : 'debounced'}`);
+          }, 3000);
 
           // Step 5: Return response
           const response = {
             success: true,
             models_discovered: models.length,
-            daemon_restarting: restarted,
+            daemon_restarting: true,
             message: models.length > 0
-              ? `Provider "${data.id}" saved with ${models.length} models. Daemon restarting to apply.`
-              : `Provider "${data.id}" saved. Daemon restarting to apply.`
+              ? `Provider "${data.id}" saved with ${models.length} models. Daemon will restart in a few seconds.`
+              : `Provider "${data.id}" saved. Daemon will restart in a few seconds.`
           };
           if (fetchError) {
             response.model_fetch_error = fetchError;
-            response.message = `Provider "${data.id}" saved, but model discovery failed: ${fetchError}. Daemon restarting.`;
+            response.message = `Provider "${data.id}" saved, but model discovery failed: ${fetchError}. Daemon will restart shortly.`;
           }
           res.writeHead(200, {'Content-Type': 'application/json'});
           res.end(JSON.stringify(response));
@@ -1748,8 +1750,11 @@ const server = http.createServer((req, res) => {
     const providerId = decodeURIComponent(deleteMatch[1]);
     removeProviderFromConfig(providerId);
     log(`🔧 Admin API: provider "${providerId}" removed`);
-    const restarted = restartKimiDaemon();
-    log(`🔄 Auto-restart after provider "${providerId}" delete: ${restarted ? 'initiated' : 'daemon not running'}`);
+    // Delay restart 3s so frontend can show success
+    setTimeout(() => {
+      const restarted = restartKimiDaemon();
+      log(`🔄 Auto-restart after provider "${providerId}" delete: ${restarted ? 'initiated' : 'debounced'}`);
+    }, 3000);
     res.writeHead(200, {'Content-Type': 'application/json'});
     return res.end(JSON.stringify({ success: true, daemon_restarting: restarted, message: `Provider "${providerId}" removed. Daemon restarting to apply.` }));
   }
@@ -1783,8 +1788,11 @@ const server = http.createServer((req, res) => {
           writeModelsForProvider(getConfigPath(), providerId, models);
         }
         log(`🔧 Rediscover: "${providerId}" — ${models.length} models found`);
-        const restarted = restartKimiDaemon();
-        log(`🔄 Auto-restart after rediscover "${providerId}": ${restarted ? 'initiated' : 'daemon not running'}`);
+        // Delay restart 3s so frontend can show success
+        setTimeout(() => {
+          const restarted = restartKimiDaemon();
+          log(`🔄 Auto-restart after rediscover "${providerId}": ${restarted ? 'initiated' : 'debounced'}`);
+        }, 3000);
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(JSON.stringify({
           success: true,
