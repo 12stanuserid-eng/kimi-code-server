@@ -130,6 +130,14 @@ type = "openai"
 api_key = "${getKey('NVIDIA_API_KEY', 'nvidia', 'nvapi-YOUR_NVIDIA_KEY')}"
 base_url = "https://integrate.api.nvidia.com/v1"
 
+
+# ─── NVIDIA Moonshot AI (Kimi K2) ─────────────────────────────────
+
+[providers."nvidia-moonshotai"]
+type = "openai"
+api_key = "${getKey('NVIDIA_API_KEY', 'nvidia', 'nvapi-YOUR_NVIDIA_KEY')}"
+base_url = "https://integrate.api.nvidia.com/v1"
+
 # ═══════════════════════════════════════════════════════════════
 # MODELS
 # ═══════════════════════════════════════════════════════════════
