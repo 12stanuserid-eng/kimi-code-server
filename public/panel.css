@@ -1,33 +1,61 @@
-/* Provider Settings Modal — Minimal styles for Kimi Code */
-#ks-modal {
-  animation: ks-fade-in 0.15s ease;
+/* Provider Settings — Kimi Code native styles */
+
+/* Provider page animations */
+#ks-provider-page {
+  animation: ks-page-in 0.2s ease;
 }
-#ks-box {
-  animation: ks-card-in 0.2s ease;
+@keyframes ks-page-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
 }
-@keyframes ks-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+
+/* Sidebar item hover */
+#ks-sidebar-item:hover {
+  background: var(--color-surface, #161b22) !important;
 }
-@keyframes ks-card-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
+
 /* Input focus styling */
-#ks-frm input:focus {
+#ks-provider-page input:focus {
   border-color: var(--color-accent, #58a6ff) !important;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.12) !important;
 }
+
+/* Button hover effects */
+#ks-provider-page button:hover {
+  opacity: 0.9;
+}
+#ks-provider-page button:active {
+  transform: scale(0.98);
+}
+
 /* Scrollbar */
-#ks-modal ::-webkit-scrollbar,
-#ks-box ::-webkit-scrollbar {
+#ks-provider-page ::-webkit-scrollbar {
   width: 6px;
 }
-#ks-modal ::-webkit-scrollbar-track,
-#ks-box ::-webkit-scrollbar-track {
+#ks-provider-page ::-webkit-scrollbar-track {
   background: transparent;
 }
-#ks-modal ::-webkit-scrollbar-thumb,
-#ks-box ::-webkit-scrollbar-thumb {
+#ks-provider-page ::-webkit-scrollbar-thumb {
   background: var(--color-line, #2d333b);
   border-radius: 3px;
+}
+#ks-provider-page ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint, #6b7280);
+}
+
+/* Back button hover */
+#ks-back-btn:hover {
+  border-color: var(--color-accent, #58a6ff) !important;
+  background: var(--color-accent, #58a6ff) !important;
+  color: #fff !important;
+}
+
+/* Restart button hover */
+#ks-restart-btn:hover {
+  border-color: var(--color-accent, #58a6ff) !important;
+}
+
+/* Refresh button hover */
+#ks-refresh-btn:hover {
+  background: var(--color-surface-raised, #161b22) !important;
 }

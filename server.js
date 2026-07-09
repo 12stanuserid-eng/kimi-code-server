@@ -880,7 +880,7 @@ function checkAndRestore() {
     log('🔄 Sessions missing — attempting restore...');
     // Try local first
     const localBackup = getLatestLocalBackup();
-    if (localBackup && localBackup.size >= 5000) {
+    if (localBackup && localBackup.size >= 1000) {
       log(`📦 Found local backup: ${localBackup.name} (${(localBackup.size/1024).toFixed(1)}KB)`);
       if (restoreFromLocalBackup(localBackup.file)) {
         log('🔄 Restarting daemon after local restore...');
@@ -1673,8 +1673,8 @@ const server = http.createServer((req, res) => {
       // Force Pentaract only
       restored = restoreFromPentaract();
     } else {
-      // Auto: try local first, but skip if it's too small (< 5KB = config-only, no sessions)
-      if (localBk && localBk.size >= 5000) {
+      // Auto: try local first (any size — even config-only backups are useful)
+      if (localBk && localBk.size >= 1000) {
         restored = restoreFromLocalBackup(localBk.file);
       }
       if (!restored) {
