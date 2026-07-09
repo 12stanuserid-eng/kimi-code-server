@@ -1506,6 +1506,9 @@ function restartKimiDaemon() {
   }
   lastRestartTime = now;
 
+  // Always regenerate session_index.jsonl before restart so daemon picks up latest sessions
+  try { ensureWorkspaceMapping(); regenerateSessionIndex(); } catch(e) {}
+
   // Case 1: We spawned the daemon — kill and let it auto-restart
   if (kimiProc && !kimiProc.killed) {
     log('🔄 Restarting Kimi daemon (SIGTERM)...');
@@ -1514,35 +1517,34 @@ function restartKimiDaemon() {
     return true;
   }
 
-  // Case 2: External daemon (KIMI_PORT !== PORT+1) — use command to restart
+  // Case 2: External daemon (KIMI_PORT !== PORT+1) — use 'kimi server kill' (graceful stop),
+  // the bash wrapper (PID 7324) auto-restarts the node process after SIGTERM
   try {
-    log(`🔄 Restarting external daemon on ${KIMI_PORT} via 'kimi server restart'...`);
-    const kimiBin = process.env['KIMI_CODE_BIN'] || 'kimi';
-    execSync(`${kimiBin} server restart --port ${KIMI_PORT}`, { timeout: 10000, stdio: 'pipe' });
-    log('✅ External daemon restart command sent');
-    // Mark daemon as temporarily down — health check will pick it up
+    log(`🔄 Restarting external daemon on ${KIMI_PORT} via 'kimi server kill'...`);
+    const kimiBin = process.env['KIMI_CODE_BIN'] || '/root/.kimi-code/bin/kimi';
+    execSync(`${kimiBin} server kill`, { timeout: 15000, stdio: 'pipe' });
+    log('✅ kimi server kill sent — bash wrapper will auto-restart');
     daemonAlive = false;
-    // Re-check after 5s
+    // wallet for daemon to restart and re-read session index + config
     setTimeout(checkDaemon, 5000);
     return true;
   } catch (e) {
-    log(`⚠️ External daemon restart command failed: ${e.message}`);
-    // If kimi command not found, try SIGHUP (daemons often reload on SIGHUP)
+    log(`⚠️ 'kimi server kill' failed: ${e.message}`);
+    // Fallback: send SIGTERM directly to the node process (child of bash wrapper)
     try {
-      // Find the daemon PID (the bash wrapper PID is 7324, child is node)
-      const pidResult = execSync(`pgrep -f "kimi-code.*server.*run.*port ${KIMI_PORT}" || pgrep -f "kimi.*server.*run" || true`, { timeout: 5000, encoding: 'utf8' });
-      const pids = pidResult.trim().split('\n').filter(Boolean);
-      if (pids.length > 0) {
-        const targetPid = pids[0];
-        log(`📡 Sending SIGHUP to daemon PID ${targetPid} for config reload...`);
-        execSync(`kill -HUP ${targetPid}`, { timeout: 2000 });
-        log('✅ SIGHUP sent — daemon should reload config');
+      const pidResult = execSync(`pgrep -P 7324 -x node || true`, { timeout: 5000, encoding: 'utf8' });
+      const nodePids = pidResult.trim().split('\n').filter(Boolean);
+      if (nodePids.length > 0) {
+        const targetPid = nodePids[0];
+        log(`📡 Sending SIGTERM to node PID ${targetPid} (bash wrapper will auto-restart)...`);
+        execSync(`kill ${targetPid}`, { timeout: 2000 });
+        daemonAlive = false;
+        setTimeout(checkDaemon, 5000);
         return true;
       }
     } catch (e2) {
-      log(`⚠️ SIGHUP also failed: ${e2.message}`);
+      log(`⚠️ SIGTERM to node process also failed: ${e2.message}`);
     }
-    // Config was still written to disk — user just needs to manually restart
     log('⚠️ Could not restart daemon automatically. Config saved to disk for next daemon restart.');
     return false;
   }
@@ -2220,71 +2222,46 @@ function cleanupPendingReconnect(clientId) {
 }
 
 // ====== WebSocket Proxy for Kimi daemon (via raw TCP) ======
+// Track active WS connections to close old ones on reconnection
+const activeWsConnections = {};
+
 server.on('upgrade', (req, socket, head) => {
   log(`⬆️ WebSocket upgrade: ${req.url}`);
 
   const clientId = getClientId(req.url);
   if (clientId) log(`  👤 client_id=${clientId}`);
 
-  // Check if we already have a daemon socket for this client (page refresh / reconnect)
-  const existing = clientId ? pendingReconnect[clientId] : null;
-  if (existing && existing.proxySocket && !existing.proxySocket.destroyed && existing.proxySocket.writable) {
-    log(`  ♻️ Reusing existing daemon socket for ${clientId}`);
-    cleanupPendingReconnect(clientId);
-
-    const proxySocket = existing.proxySocket;
-
-    // Unpipe anything still connected (should be nothing, but be safe)
-    proxySocket.unpipe();
-    proxySocket.removeAllListeners('data');
-
-    // Write a fresh HTTP upgrade response to the new browser socket
-    const upgradeResp = 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n';
-    socket.write(upgradeResp);
-
-    // Enable keepalive
-    proxySocket.setKeepAlive(true, 10000);
-    socket.setKeepAlive(true, 10000);
-
-    // Bidirectional pipe
-    proxySocket.pipe(socket);
-    socket.pipe(proxySocket);
-
-    // Client close → 30s grace
-    socket.on('close', () => {
-      log(`  ⏳ Client ${clientId} disconnected, keeping daemon socket for 30s`);
-      socket.unpipe();
-      proxySocket.unpipe();
-      const timer = setTimeout(() => {
-        log(`  ⌛ Grace period expired for ${clientId}, destroying daemon socket`);
-        cleanupPendingReconnect(clientId);
-        try { proxySocket.destroy(); } catch(e) {}
-      }, 30000);
-      pendingReconnect[clientId] = { proxySocket, timer };
-    });
-
-    // Daemon close → destroy both
-    proxySocket.on('close', () => {
-      cleanupPendingReconnect(clientId);
-      try { socket.destroy(); } catch(e) {}
-    });
-
-    // Error handlers
-    socket.on('error', () => {});
-    proxySocket.on('error', () => {});
-
-    return;
+  // === IMPORTANT: Close any existing WS connection for this client before opening new one ===
+  // This prevents multiple TCP sockets to the daemon from the same browser tab,
+  // which causes "WebSocket error" and daemon connection pool exhaustion.
+  if (clientId && activeWsConnections[clientId]) {
+    log(`  🔄 Closing old connection for ${clientId} before opening new one`);
+    try {
+      const old = activeWsConnections[clientId];
+      if (old.timer) clearTimeout(old.timer);
+      if (old.proxySocket && !old.proxySocket.destroyed) {
+        old.proxySocket.unpipe();
+        old.proxySocket.removeAllListeners();
+        old.proxySocket.destroy();
+      }
+      if (old.clientSocket && !old.clientSocket.destroyed) {
+        old.clientSocket.unpipe();
+        old.clientSocket.removeAllListeners();
+        old.clientSocket.destroy();
+      }
+    } catch(e) {}
+    delete activeWsConnections[clientId];
   }
 
-  // Clean up any stale entry
+  // Clean up any stale pending reconnect entry
   if (clientId) cleanupPendingReconnect(clientId);
 
   const targetPort = KIMI_PORT;
   const targetHost = '127.0.0.1';
 
-  // Open raw TCP connection to Kimi daemon
+  // Open fresh raw TCP connection to Kimi daemon — always a new connection
   const proxySocket = net.connect(targetPort, targetHost, () => {
-    log(`✅ TCP connected to ${targetHost}:${targetPort}`);
+    log(`✅ WS TCP connected to ${targetHost}:${targetPort}`);
 
     // Manually write the HTTP upgrade request (no http.request wrapper)
     const requestLine = `${req.method} ${req.url} HTTP/1.1\r\n`;
@@ -2296,10 +2273,8 @@ server.on('upgrade', (req, socket, head) => {
       if (lower === 'connection') {
         proxySocket.write(`connection: upgrade\r\n`);
       } else if (lower === 'authorization') {
-        // Skip — we inject the daemon's Bearer token below
-        continue;
+        continue; // we inject the daemon's Bearer token below
       } else if (lower === 'host' || lower === 'origin') {
-        // Forward original host/origin — KIMI_CODE_ALLOWED_HOSTS includes them
         proxySocket.write(`${key}: ${value}\r\n`);
       } else {
         proxySocket.write(`${key}: ${value}\r\n`);
@@ -2330,11 +2305,10 @@ server.on('upgrade', (req, socket, head) => {
           const firstLine = headerStr.split('\r\n')[0];
 
           if (firstLine.includes('101')) {
-            log(`✅ Kimi daemon accepted WebSocket upgrade: ${firstLine}`);
+            log(`✅ Daemon accepted WebSocket upgrade: ${firstLine}`);
             daemonAlive = true;
 
-            // Split response at header boundary — 101 headers may arrive
-            // in the same TCP packet as the first WebSocket frame(s).
+            // Split response at header boundary
             const headerPart = responseBuffer.slice(0, headerEnd + 4);
             const bodyPart = responseBuffer.slice(headerEnd + 4);
 
@@ -2346,37 +2320,42 @@ server.on('upgrade', (req, socket, head) => {
               socket.write(bodyPart);
             }
           } else {
-            // Log full response headers for debugging
             const responseHeaders = headerStr.split('\r\n').slice(1).join(' | ');
             log(`❌ Upgrade rejected: ${firstLine} | ${responseHeaders}`);
             const body = responseBuffer.slice(headerEnd + 4).toString().trim();
             if (body) log(`❌ Rejection body: ${body}`);
-            // Send 502 to client so browser gets meaningful error
             try {
               socket.write('HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nBad Gateway: Kimi daemon rejected WebSocket upgrade');
               socket.end();
             } catch(e) {}
+            if (clientId) delete activeWsConnections[clientId];
             proxySocket.destroy();
             return;
           }
 
-          // Enable TCP keepalive on both ends to prevent idle disconnects
+          // Enable TCP keepalive on both ends
           proxySocket.setKeepAlive(true, 10000);
           socket.setKeepAlive(true, 10000);
 
-          // Bidirectional pipe
+          // Track this connection so we can close it on reconnection
+          if (clientId) {
+            activeWsConnections[clientId] = { proxySocket, clientSocket: socket, timer: null };
+          }
+
+          // Bidirectional pipe (data frames after upgrade)
           proxySocket.pipe(socket);
           socket.pipe(proxySocket);
         }
       }
     });
 
-    // Timeout for the upgrade handshake
+    // Timeout for the upgrade handshake (10s to handle daemon being slow)
     setTimeout(() => {
       if (!responseComplete) {
         log('❌ WebSocket upgrade handshake timeout (5s)');
-        socket.destroy();
-        proxySocket.destroy();
+        if (clientId) delete activeWsConnections[clientId];
+        try { socket.destroy(); } catch(e) {}
+        try { proxySocket.destroy(); } catch(e) {}
       }
     }, 5000);
   });
@@ -2384,36 +2363,45 @@ server.on('upgrade', (req, socket, head) => {
   proxySocket.on('error', (err) => {
     log(`❌ WebSocket TCP error: ${err.message}`);
     daemonAlive = false;
-    socket.destroy();
-  });
-
-  socket.on('error', (err) => {
-    log(`❌ Client WebSocket error: ${err.message}`);
-    proxySocket.destroy();
-  });
-
-  // Client close → 30s grace before destroying daemon socket (allows page refresh)
-  socket.on('close', () => {
-    log(`  ⏳ Client ${clientId || 'unknown'} disconnected, keeping daemon socket for 30s`);
-    socket.unpipe();
-    proxySocket.unpipe();
-    const timer = setTimeout(() => {
-      log(`  ⌛ Grace period expired for ${clientId || 'unknown'}, destroying daemon socket`);
-      if (clientId) cleanupPendingReconnect(clientId);
-      try { proxySocket.destroy(); } catch(e) {}
-    }, 30000);
-    if (clientId) pendingReconnect[clientId] = { proxySocket, timer };
-  });
-
-  // Daemon close → clean up
-  proxySocket.on('close', () => {
-    if (clientId) cleanupPendingReconnect(clientId);
+    if (clientId) delete activeWsConnections[clientId];
     try { socket.destroy(); } catch(e) {}
   });
 
-  // Error handlers — catch silently to avoid crash on half-closed sockets
-  socket.on('error', () => {});
-  proxySocket.on('error', () => {});
+  socket.on('error', (err) => {
+    // Only log if we haven't already started cleaning up
+    if (clientId && activeWsConnections[clientId]) {
+      log(`❌ Client WS error (${clientId}): ${err.message}`);
+      delete activeWsConnections[clientId];
+    }
+    try { proxySocket.destroy(); } catch(e) {}
+  });
+
+  // Client close — clean up tracked connection immediately (no 30s grace)
+  // On page refresh, browser first closes old WS then opens new one.
+  // The new WS upgrade handler (above) will close this old entry via clientId match.
+  socket.on('close', () => {
+    if (clientId) {
+      if (activeWsConnections[clientId]) {
+        // Leave it tracked — the 'close' handler above this one will clean it
+        // when a new WS upgrade comes in with the same clientId.
+      } else {
+        cleanupPendingReconnect(clientId);
+      }
+    }
+    try {
+      proxySocket.unpipe();
+      proxySocket.destroy();
+    } catch(e) {}
+  });
+
+  // Daemon close — clean up
+  proxySocket.on('close', () => {
+    if (clientId) {
+      delete activeWsConnections[clientId];
+      cleanupPendingReconnect(clientId);
+    }
+    try { socket.destroy(); } catch(e) {}
+  });
 });
 
 server.listen(PORT, '0.0.0.0', () => {

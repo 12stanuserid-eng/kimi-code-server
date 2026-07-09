@@ -25,6 +25,7 @@
     streamBuffer: '',
     streamMsgEl: null,
     reconnectTimer: null,
+    wsReconnectAttempts: 0,
     heartbeatTimer: null,
     turnId: null,
   };
@@ -495,27 +496,38 @@
     }
     state.wsConnected = false;
     state.subscribed = false;
+    state.wsReconnectAttempts = 0;
   }
 
   function connectWs(sessionId) {
     disconnectWs();
 
-    // Build WS URL — no token needed, proxy injects Authorization header
+    // Use a persistent client_id stored in localStorage so the proxy can properly
+    // close the old daemon TCP connection before opening a new one.
+    // This prevents "WebSocket error" from multiple stale connections to the daemon.
+    var clientId = localStorage.getItem('kimi-ws-client-id');
+    if (!clientId) {
+      clientId = 'chat-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('kimi-ws-client-id', clientId);
+    }
+    state.wsClientId = clientId;
+
+    // Build WS URL with client_id so proxy can manage daemon connections
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var wsUrl = protocol + '//' + window.location.host + WS_BASE;
+    var wsUrl = protocol + '//' + window.location.host + WS_BASE + '?client_id=' + encodeURIComponent(clientId);
 
     var ws = new WebSocket(wsUrl);
     state.ws = ws;
-    state.wsClientId = 'chat-ui-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
     ws.onopen = function() {
       state.wsConnected = true;
+      state.wsReconnectAttempts = 0; // reset on successful connect
       // Send client_hello to initiate connection
       sendWs({
         type: 'client_hello',
-        id: state.wsClientId + '-hello',
+        id: clientId + '-hello',
         payload: {
-          client_id: state.wsClientId,
+          client_id: clientId,
           subscriptions: ['sessions'],
           cursors: {}
         }
@@ -534,7 +546,10 @@
       state.wsConnected = false;
       state.subscribed = false;
       if (state.currentSessionId === sessionId) {
-        state.reconnectTimer = setTimeout(function() { connectWs(sessionId); }, 3000);
+        // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+        state.wsReconnectAttempts = (state.wsReconnectAttempts || 0) + 1;
+        var delay = Math.min(2000 * Math.pow(2, state.wsReconnectAttempts - 1), 30000);
+        state.reconnectTimer = setTimeout(function() { connectWs(sessionId); }, delay);
       }
     };
   }
