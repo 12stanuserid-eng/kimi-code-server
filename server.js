@@ -2172,10 +2172,8 @@ const server = http.createServer((req, res) => {
           } else {
             wsRedirect = '<!-- WS direct: tunnel not available -->';
           }
-          // Replace: inject the new chat UI overlay instead of the old provider panel
-          // The chat UI is a full SPA that hides the original Vue app and renders its own
-          const chatUIScript = '<link rel="stylesheet" href="/kimi-admin/chat-ui.css"><script src="/kimi-admin/chat-ui.js"></script>';
-          const allScripts = wsScript + '\n' + wsRedirect + '\n' + chatUIScript;
+          // WS redirect and workspace scripts only — original Kimi Code UI preserved
+          const allScripts = wsScript + '\n' + wsRedirect;
           if (html.includes('</body>')) html = html.replace('</body>', allScripts + '\n</body>');
           else if (html.includes('</html>')) html = html.replace('</html>', allScripts + '\n</html>');
           else html += allScripts;
