@@ -777,6 +777,8 @@ function regenerateSessionIndex() {
       return;
     }
 
+    log('🔧 [regenerateSessionIndex] Starting...');
+
     // Read workspaces.json to map bucket IDs → workspace root paths (workDir)
     const wsMap = {}; // bucketId -> workDir (absolute path)
     try {
@@ -786,9 +788,12 @@ function regenerateSessionIndex() {
         for (const [id, ws] of Object.entries(wsData.workspaces || {})) {
           if (ws.root) wsMap[id] = ws.root;
         }
+        log(`🔧 [regenerateSessionIndex] Loaded ${Object.keys(wsMap).length} workspace mappings from workspaces.json`);
+      } else {
+        log('⚠️ [regenerateSessionIndex] workspaces.json not found');
       }
     } catch(e) {
-      log(`⚠️ Could not read workspaces.json: ${e.message}`);
+      log(`⚠️ [regenerateSessionIndex] Could not read workspaces.json: ${e.message}`);
     }
 
     // Detect the current workspace root (CWD of kimi daemon)
@@ -797,6 +802,7 @@ function regenerateSessionIndex() {
     const entries = [];
     let skipped = 0;
     const wsDirs = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    log(`🔧 [regenerateSessionIndex] Found ${wsDirs.length} workspace directories`);
     for (const ws of wsDirs) {
       const wsPath = path.join(sessionsDir, ws.name);
       // Look up workDir for this bucket — must be absolute path
@@ -816,9 +822,10 @@ function regenerateSessionIndex() {
         } else {
           workDir = currentWorkDir; // generic fallback
         }
-        log(`🔧 No workspaces.json entry for "${ws.name}" — using derived path: ${workDir}`);
+        log(`🔧 [regenerateSessionIndex] No workspaces.json entry for "${ws.name}" — using derived path: ${workDir}`);
       }
       const sessDirs = fs.readdirSync(wsPath, { withFileTypes: true }).filter(d => d.isDirectory());
+      log(`🔧 [regenerateSessionIndex] Workspace "${ws.name}" has ${sessDirs.length} sessions`);
       for (const sess of sessDirs) {
         const sessionDir = path.join(wsPath, sess.name);
         // Daemon requires: basename(sessionDir) === sessionId
@@ -832,9 +839,9 @@ function regenerateSessionIndex() {
     }
     // Write entries — daemon expects exactly: {"sessionId":"...","sessionDir":"...","workDir":"..."}
     fs.writeFileSync(indexPath, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
-    log(`✅ Regenerated session_index.jsonl with ${entries.length} sessions (workDir mapped for ${Object.keys(wsMap).length} workspaces)`);
+    log(`✅ [regenerateSessionIndex] Regenerated session_index.jsonl with ${entries.length} sessions (workDir mapped for ${Object.keys(wsMap).length} workspaces)`);
   } catch (err) {
-    log(`⚠️ regenerateSessionIndex failed: ${err.message}`);
+    log(`⚠️ [regenerateSessionIndex] failed: ${err.message}`);
   }
 }
 
@@ -1089,9 +1096,14 @@ function checkAndRestore() {
     // ALWAYS regenerate session index to ensure all sessions appear in UI
     const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
     try {
+      log('🔧 Ensuring workspace mapping before session index regeneration...');
       ensureWorkspaceMapping();
+      log('🔄 Regenerating session_index.jsonl...');
       regenerateSessionIndex();
-    } catch(e) {}
+      log('✅ Session index regenerated successfully');
+    } catch(e) {
+      log(`⚠️ Session index regeneration failed: ${e.message}`);
+    }
     try { performLocalBackup(); } catch (e) {}
     return true;
   }
