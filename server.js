@@ -2172,8 +2172,102 @@ const server = http.createServer((req, res) => {
           } else {
             wsRedirect = '<!-- WS direct: tunnel not available -->';
           }
-          // WS redirect and workspace scripts only — original Kimi Code UI preserved
-          const allScripts = wsScript + '\n' + wsRedirect;
+          // Provider manager fix — add "Manage Providers" button to settings dialog and fix /provider command
+          const providerScript = '<script>\n(function(){\n' +
+'  function openProviders() {\n' +
+'    try {\n' +
+'      var el = document.querySelector("#app");\n' +
+'      if (!el || !el.__vue_app__) return false;\n' +
+'      function walk(comp) {\n' +
+'        if (!comp) return false;\n' +
+'        if (comp.setupState && comp.setupState.Pn !== void 0) {\n' +
+'          if (comp.setupState.Pn.value !== null) {\n' +
+'            comp.setupState.Pn.value = true;\n' +
+'            return true;\n' +
+'          }\n' +
+'        }\n' +
+'        if (comp.subTree) {\n' +
+'          if (comp.subTree.component && walk(comp.subTree.component)) return true;\n' +
+'          if (comp.subTree.children) {\n' +
+'            for (var i = 0; i < comp.subTree.children.length; i++) {\n' +
+'              var c = comp.subTree.children[i];\n' +
+'              if (c.component && walk(c.component)) return true;\n' +
+'            }\n' +
+'          }\n' +
+'        }\n' +
+'        return false;\n' +
+'      }\n' +
+'      return walk(el.__vue_app__._instance);\n' +
+'    } catch(e) { console.warn("openProviders error:", e); }\n' +
+'    return false;\n' +
+'  }\n' +
+'  // Intercept /provider command at window level (capture phase)\n' +
+'  window.addEventListener("keydown", function(e) {\n' +
+'    if (e.key === "Enter") {\n' +
+'      var t = e.target;\n' +
+'      if (t && t.tagName === "TEXTAREA" && t.value.trim() === "/provider") {\n' +
+'        e.preventDefault();\n' +
+'        e.stopPropagation();\n' +
+'        t.value = "";\n' +
+'        openProviders();\n' +
+'        return;\n' +
+'      }\n' +
+'    }\n' +
+'  }, true);\n' +
+'  // Helper: inject "Manage Providers" button before "Sign out" button\n' +
+'  function injectProvBtn() {\n' +
+'    var btns = document.querySelectorAll("button");\n' +
+'    for (var i = 0; i < btns.length; i++) {\n' +
+'      var btn = btns[i];\n' +
+'      if (btn.__provPatchDone) continue;\n' +
+'      if (btn.textContent.trim().toLowerCase() === "sign out") {\n' +
+'        var parent = btn.parentElement;\n' +
+'        if (!parent || parent.__provBtnAdded) continue;\n' +
+'        if (parent.querySelector(".prov-mgmt-btn")) continue;\n' +
+'        var newBtn = document.createElement("button");\n' +
+'        newBtn.type = "button";\n' +
+'        newBtn.className = "act prov-mgmt-btn";\n' +
+'        newBtn.textContent = "Manage Providers";\n' +
+'        newBtn.onclick = function() {\n' +
+'          var closeBtn = document.querySelector(\'[aria-label="Close (Esc)"]\');\n' +
+'          if (closeBtn) closeBtn.click();\n' +
+'          setTimeout(openProviders, 200);\n' +
+'        };\n' +
+'        parent.insertBefore(newBtn, btn);\n' +
+'        parent.__provBtnAdded = true;\n' +
+'      }\n' +
+'      btn.__provPatchDone = true;\n' +
+'    }\n' +
+'  }\n' +
+'  // Watch for settings dialog (MutationObserver)\n' +
+'  var obs = new MutationObserver(injectProvBtn);\n' +
+'  obs.observe(document.body, {childList: true, subtree: true});\n' +
+'  // Periodic fallback: re-check every 3s\n' +
+'  setInterval(injectProvBtn, 3000);\n' +
+'  // Floating "+" button as permanent fallback\n' +
+'  var floatingBtn = document.createElement("button");\n' +
+'  floatingBtn.id = "kimi-floating-prov-btn";\n' +
+'  floatingBtn.textContent = "+";\n' +
+'  floatingBtn.title = "Manage Providers";\n' +
+'  Object.assign(floatingBtn.style, {\n' +
+'    position: "fixed", bottom: "20px", right: "20px", zIndex: "99999",\n' +
+'    width: "44px", height: "44px", borderRadius: "50%",\n' +
+'    background: "#6c5ce7", color: "#fff", border: "none",\n' +
+'    fontSize: "24px", cursor: "pointer", boxShadow: "0 2px 12px rgba(108,92,231,0.4)",\n' +
+'    display: "none", alignItems: "center", justifyContent: "center"\n' +
+'  });\n' +
+'  floatingBtn.onclick = function() { openProviders(); };\n' +
+'  document.body.appendChild(floatingBtn);\n' +
+'  // Show floating button if settings injection never worked after 10s\n' +
+'  setTimeout(function() {\n' +
+'    if (!document.querySelector(".prov-mgmt-btn")) {\n' +
+'      floatingBtn.style.display = "flex";\n' +
+'    }\n' +
+'  }, 10000);\n' +
+'})();\n' +
+'</script>';
+          // WS redirect, workspace scripts, and provider fix — original Kimi Code UI preserved
+          const allScripts = wsScript + '\n' + wsRedirect + '\n' + providerScript;
           if (html.includes('</body>')) html = html.replace('</body>', allScripts + '\n</body>');
           else if (html.includes('</html>')) html = html.replace('</html>', allScripts + '\n</html>');
           else html += allScripts;
