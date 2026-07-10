@@ -72,8 +72,13 @@ function checkDaemon() {
   sock.setTimeout(3000);
   sock.on('connect', () => {
     sock.destroy();
+    const wasDead = !daemonAlive;
     daemonFailCount = 0;
-    if (!daemonAlive) log('✅ Daemon health check passed — marking alive');
+    if (wasDead) {
+      log('✅ Daemon health check passed — marking alive');
+      // Daemon recovered — restore session index if it was cleared
+      try { recoverSessionIndex(); } catch(e) { log(`⚠️ Session index recovery failed: ${e.message}`); }
+    }
     daemonAlive = true;
   });
   sock.on('error', () => {
@@ -845,6 +850,70 @@ function regenerateSessionIndex() {
   }
 }
 
+// ====== SESSION INDEX PROTECTION ======
+// Backs up session_index.jsonl before daemon restart, and recovers it if daemon clears it.
+const SESSION_INDEX_BACKUP = path.join(KIMI_HOME, 'session_index.jsonl.bak');
+
+function backupSessionIndex() {
+  const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
+  try {
+    if (fs.existsSync(indexPath)) {
+      const content = fs.readFileSync(indexPath, 'utf8');
+      if (content.trim().length > 0) {
+        fs.writeFileSync(SESSION_INDEX_BACKUP, content, 'utf8');
+        log(`💾 Session index backed up (${content.trim().split('\n').length} sessions)`);
+      }
+    }
+  } catch(e) {
+    log(`⚠️ Session index backup failed: ${e.message}`);
+  }
+}
+
+function recoverSessionIndex() {
+  const indexPath = path.join(KIMI_HOME, 'session_index.jsonl');
+  try {
+    // Check if session index is missing or empty
+    let needsRecovery = false;
+    if (!fs.existsSync(indexPath)) {
+      needsRecovery = true;
+      log('⚠️ session_index.jsonl missing — will recover');
+    } else {
+      const content = fs.readFileSync(indexPath, 'utf8').trim();
+      if (content.length === 0) {
+        needsRecovery = true;
+        log('⚠️ session_index.jsonl is empty — will recover');
+      }
+    }
+
+    if (needsRecovery) {
+      // First try regenerating from disk
+      try {
+        regenerateSessionIndex();
+        const retryContent = fs.readFileSync(indexPath, 'utf8').trim();
+        if (retryContent.length > 0) {
+          log('✅ Session index recovered via regenerateSessionIndex()');
+          return;
+        }
+      } catch(e) {
+        log(`⚠️ regenerateSessionIndex() for recovery failed: ${e.message}`);
+      }
+
+      // Fallback: restore from .bak file
+      if (fs.existsSync(SESSION_INDEX_BACKUP)) {
+        const bakContent = fs.readFileSync(SESSION_INDEX_BACKUP, 'utf8');
+        if (bakContent.trim().length > 0) {
+          fs.writeFileSync(indexPath, bakContent, 'utf8');
+          log(`✅ Session index restored from backup (${bakContent.trim().split('\n').length} sessions)`);
+          return;
+        }
+      }
+      log('⚠️ Session index recovery failed — no backup available');
+    }
+  } catch(e) {
+    log(`⚠️ Session index recovery error: ${e.message}`);
+  }
+}
+
 // ====== COMBINED BACKUP ======
 
 function performBackup() {
@@ -1509,8 +1578,8 @@ function writeModelsForProvider(configPath, providerId, models) {
   let raw;
   try { raw = fs.readFileSync(configPath, 'utf8'); } catch (e) { raw = ''; }
 
-  // Remove existing models that reference this provider
-  const modelRegex = new RegExp(`\\n?\\[models\\.\\"?${escapeRegex(providerId)}-[^\\]]*\\"?\\]\\n(?:[^\\[]*\\n)*`, 'g');
+  // Remove existing models that reference this provider (match both - and _ separators)
+  const modelRegex = new RegExp(`\\n?\\[models\\.\\"?${escapeRegex(providerId)}[-_][^\\]]*\\"?\\]\\n(?:[^\\[]*\\n)*`, 'g');
   raw = raw.replace(modelRegex, '');
 
   // Also remove model aliases that reference this provider
@@ -1518,11 +1587,14 @@ function writeModelsForProvider(configPath, providerId, models) {
   raw = raw.replace(modelRefRegex, '');
 
   // Add new models — use smart context size detection
+  // NOTE: Daemon expects model key = providerId + '_' + sanitized_basename_of_model
+  // where basename is the part after the last '/' in the model name.
   let modelBlock = '';
   models.forEach(m => {
-    const safeName = m.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const baseName = m.includes('/') ? m.split('/').pop() : m;
+    const safeName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
     const ctxSize = guessContextSize(m);
-    modelBlock += `\n[models."${providerId}-${safeName}"]\nprovider = "${providerId}"\nmodel = "${m}"\nmax_context_size = ${ctxSize}\n`;
+    modelBlock += `\n[models."${providerId}_${safeName}"]\nprovider = "${providerId}"\nmodel = "${m}"\nmax_context_size = ${ctxSize}\n`;
   });
 
   raw += modelBlock;
@@ -1543,6 +1615,8 @@ function restartKimiDaemon() {
 
   // Always regenerate session_index.jsonl before restart so daemon picks up latest sessions
   try { ensureWorkspaceMapping(); regenerateSessionIndex(); } catch(e) {}
+  // Also save a backup copy of session_index.jsonl so we can recover if daemon clears it
+  try { backupSessionIndex(); } catch(e) {}
 
   // Case 1: We spawned the daemon — kill old process and spawn new one directly
   if (kimiProc && !kimiProc.killed) {
@@ -2173,8 +2247,27 @@ const server = http.createServer((req, res) => {
           ['wd_.kimi-code_83b403bf24b6', 'wd_root_94a6b4475803'].forEach(id => {
             if (!wsIds.includes(id)) wsIds.push(id);
           });
-          // Inject workspace IDs into localStorage so sessions appear in UI
-          const wsScript = '<script>\n(function(){\n  var ids = ' + JSON.stringify(wsIds) + ';\n  try {\n    var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n    ids.forEach(function(id){ if(o.indexOf(id)===-1) o.push(id); });\n    localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n  } catch(e){}\n})();\n</script>';
+          // Inject workspace IDs into localStorage so sessions persist in UI
+          const wsIdsJson = JSON.stringify(wsIds);
+          const wsScript = '<script>\n(function(){\n' +
+'  var targetIds = ' + wsIdsJson + ';\n' +
+'  function injectWorkspaceIds() {\n' +
+'    try {\n' +
+'      var o = JSON.parse(localStorage.getItem("kimi-web.workspace-order") || "[]");\n' +
+'      var changed = false;\n' +
+'      targetIds.forEach(function(id){ if(o.indexOf(id)===-1){ o.push(id); changed=true; } });\n' +
+'      if (changed) localStorage.setItem("kimi-web.workspace-order", JSON.stringify(o));\n' +
+'      // Also ensure kimi-web.workspaces has these IDs\n' +
+'      var ws = JSON.parse(localStorage.getItem("kimi-web.workspaces") || "{}");\n' +
+'      targetIds.forEach(function(id){ if(!ws[id]){ ws[id]={id:id,name:id.replace(/^wd_/,\\"\\").substring(0,20)}; } });\n' +
+'      localStorage.setItem("kimi-web.workspaces", JSON.stringify(ws));\n' +
+'    } catch(e){}\n' +
+'  }\n' +
+'  injectWorkspaceIds();\n' +
+'  setInterval(injectWorkspaceIds, 30000);\n' +
+'  document.addEventListener("visibilitychange", function(){ if(!document.hidden) injectWorkspaceIds(); });\n' +
+'})();\n' +
+'</script>';
           // WebSocket redirect — always use tunnel when available for reliable WS connections
           // Cloudflare (and some reverse proxies) block WS upgrades; tunnel bypasses this
           const tunnelOrigin = (() => { try { return tunnelUrl ? new URL(tunnelUrl).origin : null; } catch(e) { return null; } })();
@@ -2184,36 +2277,323 @@ const server = http.createServer((req, res) => {
           } else {
             wsRedirect = '<!-- WS direct: tunnel not available -->';
           }
-          // Provider manager fix — add "Manage Providers" button to settings dialog and fix /provider command
+          // Provider manager — robust multi-strategy provider panel + floating modal
           const providerScript = '<script>\n(function(){\n' +
-'  function openProviders() {\n' +
-'    try {\n' +
-'      var el = document.querySelector("#app");\n' +
-'      if (!el || !el.__vue_app__) return false;\n' +
-'      function walk(comp) {\n' +
-'        if (!comp) return false;\n' +
-'        if (comp.setupState && comp.setupState.Pn !== void 0) {\n' +
-'          if (comp.setupState.Pn.value !== null) {\n' +
-'            comp.setupState.Pn.value = true;\n' +
-'            return true;\n' +
-'          }\n' +
+'  var PROVIDER_DEBUG = false;\n' +
+'  function pLog() { if (PROVIDER_DEBUG) console.log.apply(console, arguments); }\n' +
+'\n' +
+'  // ====== STRATEGY 1: Try Vue internal ref (Pn, or other minified names) ======\n' +
+'  function tryVueRef(comp, refNames) {\n' +
+'    if (!comp || !comp.setupState) return false;\n' +
+'    for (var k = 0; k < refNames.length; k++) {\n' +
+'      var ref = comp.setupState[refNames[k]];\n' +
+'      if (ref !== void 0) {\n' +
+'        if (ref.value !== null && ref.value !== false) {\n' +
+'          ref.value = true;\n' +
+'          return true;\n' +
 '        }\n' +
-'        if (comp.subTree) {\n' +
-'          if (comp.subTree.component && walk(comp.subTree.component)) return true;\n' +
-'          if (comp.subTree.children) {\n' +
-'            for (var i = 0; i < comp.subTree.children.length; i++) {\n' +
-'              var c = comp.subTree.children[i];\n' +
-'              if (c.component && walk(c.component)) return true;\n' +
-'            }\n' +
-'          }\n' +
-'        }\n' +
-'        return false;\n' +
 '      }\n' +
-'      return walk(el.__vue_app__._instance);\n' +
+'    }\n' +
+'    return false;\n' +
+'  }\n' +
+'\n' +
+'  function walkVueTree(comp, refNames) {\n' +
+'    function walk(c) {\n' +
+'      if (!c) return false;\n' +
+'      if (tryVueRef(c, refNames)) return true;\n' +
+'      if (c.subTree) {\n' +
+'        if (c.subTree.component && walk(c.subTree.component)) return true;\n' +
+'        if (c.subTree.children) {\n' +
+'          for (var i = 0; i < c.subTree.children.length; i++) {\n' +
+'            var child = c.subTree.children[i];\n' +
+'            if (child && child.component && walk(child.component)) return true;\n' +
+'          }\n' +
+'        }\n' +
+'      }\n' +
+'      return false;\n' +
+'    }\n' +
+'    var el = document.querySelector("#app");\n' +
+'    if (!el || !el.__vue_app__) return false;\n' +
+'    return walk(el.__vue_app__._instance);\n' +
+'  }\n' +
+'\n' +
+'  // Try known Vue ref names for provider/settings panel\n' +
+'  function openProvidersVue() {\n' +
+'    try {\n' +
+'      // Try current known ref names (Pn, showProviders, showProviderPanel, etc.)\n' +
+'      var refNames = ["Pn","showProviders","showProviderPanel","_showProviders","showProviderManager","providerPanelVisible","providersVisible"];\n' +
+'      if (walkVueTree(null, refNames)) { pLog("openProviders: Vue ref worked"); return true; }\n' +
+'      // Try to find and click settings gear button first\n' +
+'      var gearBtns = document.querySelectorAll(\'button[aria-label*="Settings"], button[aria-label*="settings"], .settings-btn, [data-settings], svg[class*="gear"], svg[class*="cog"]\');\n' +
+'      for (var i = 0; i < gearBtns.length; i++) {\n' +
+'        var btn = gearBtns[i].tagName === "SVG" ? gearBtns[i].closest("button") || gearBtns[i].parentElement : gearBtns[i];\n' +
+'        if (btn && btn.tagName === "BUTTON") { btn.click(); pLog("openProviders: clicked settings gear"); return true; }\n' +
+'      }\n' +
+'      // Try the combo: trigger settings via keyboard shortcut?\n' +
+'      pLog("openProviders: Vue ref approach failed");\n' +
 '    } catch(e) { console.warn("openProviders error:", e); }\n' +
 '    return false;\n' +
 '  }\n' +
-'  // Intercept /provider command at window level (capture phase)\n' +
+'\n' +
+'  // ====== STRATEGY 2: Full provider management modal (no Vue deps) ======\n' +
+'  var provModal = null;\n' +
+'  var provModalStyle = null;\n' +
+'\n' +
+'  function createProviderModal() {\n' +
+'    if (provModal) { provModal.style.display = "flex"; return; }\n' +
+'    // Inject CSS\n' +
+'    if (!provModalStyle) {\n' +
+'      provModalStyle = document.createElement("style");\n' +
+'      provModalStyle.textContent = \'\\\n' +
+'#kimi-prov-modal {\\\n' +
+'  position:fixed;top:0;left:0;right:0;bottom:0;z-index:999999;\\\n' +
+'  background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center;\\\n' +
+'  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;\\\n' +
+'}\\\n' +
+'#kimi-prov-modal.open { display:flex; }\\\n' +
+'.kimi-prov-panel {\\\n' +
+'  background:#1a1a2e;border-radius:16px;padding:24px;width:90%;max-width:720px;\\\n' +
+'  max-height:85vh;overflow-y:auto;color:#e0e0e0;box-shadow:0 8px 40px rgba(0,0,0,0.5);\\\n' +
+'  border:1px solid #2a2a4a;\\\n' +
+'}\\\n' +
+'.kimi-prov-panel h2 { margin:0 0 16px 0; font-size:20px; color:#fff; display:flex; align-items:center; gap:8px; }\\\n' +
+'.kimi-prov-panel h2 span { background:#6c5ce7; padding:2px 10px; border-radius:10px; font-size:12px; }\\\n' +
+'.kimi-prov-close { float:right; background:none; border:none; color:#888; font-size:24px; cursor:pointer; padding:0 4px; }\\\n' +
+'.kimi-prov-close:hover { color:#fff; }\\\n' +
+'.kimi-prov-card {\\\n' +
+'  background:#16213e;border-radius:10px;padding:12px 16px;margin-bottom:8px;\\\n' +
+'  display:flex;align-items:center;justify-content:space-between;gap:12px;\\\n' +
+'  border:1px solid #1e2d50;\\\n' +
+'}\\\n' +
+'.kimi-prov-card .info { flex:1; min-width:0; }\\\n' +
+'.kimi-prov-card .name { font-weight:600; color:#fff; font-size:14px; }\\\n' +
+'.kimi-prov-card .meta { font-size:11px; color:#888; margin-top:2px; }\\\n' +
+'.kimi-prov-card .actions { display:flex; gap:6px; flex-shrink:0; }\\\n' +
+'.kimi-prov-btn {\\\n' +
+'  padding:5px 12px;border-radius:6px;border:none;font-size:12px;\\\n' +
+'  cursor:pointer;font-weight:500;transition:all 0.2s;\\\n' +
+'}\\\n' +
+'.kimi-prov-btn.primary { background:#6c5ce7; color:#fff; }\\\n' +
+'.kimi-prov-btn.primary:hover { background:#5a4bd1; }\\\n' +
+'.kimi-prov-btn.danger { background:#e74c3c; color:#fff; }\\\n' +
+'.kimi-prov-btn.danger:hover { background:#c0392b; }\\\n' +
+'.kimi-prov-btn.secondary { background:#2a2a4a; color:#ccc; }\\\n' +
+'.kimi-prov-btn.secondary:hover { background:#3a3a5a; }\\\n' +
+'.kimi-prov-btn.sm { padding:3px 8px; font-size:11px; }\\\n' +
+'.kimi-prov-btn:disabled { opacity:0.5; cursor:not-allowed; }\\\n' +
+'.kimi-prov-add {\\\n' +
+'  background:#16213e;border-radius:10px;padding:16px;margin-top:12px;\\\n' +
+'  border:1px dashed #2a2a4a;\\\n' +
+'}\\\n' +
+'.kimi-prov-add h3 { margin:0 0 10px 0; font-size:14px; color:#aaa; }\\\n' +
+'.kimi-prov-add input,\\\n' +
+'.kimi-prov-add select {\\\n' +
+'  width:100%;padding:8px 12px;margin-bottom:8px;border-radius:6px;\\\n' +
+'  border:1px solid #2a2a4a;background:#0d1117;color:#e0e0e0;font-size:13px;\\\n' +
+'  box-sizing:border-box;\\\n' +
+'}\\\n' +
+'.kimi-prov-add input:focus,\\\n' +
+'.kimi-prov-add select:focus { outline:none; border-color:#6c5ce7; }\\\n' +
+'.kimi-prov-add .row { display:flex; gap:8px; }\\\n' +
+'.kimi-prov-add .row input { flex:1; }\\\n' +
+'.kimi-prov-status { padding:8px 12px; border-radius:6px; margin:8px 0; font-size:12px; display:none; }\\\n' +
+'.kimi-prov-status.error { display:block; background:#2d1515; color:#e74c3c; border:1px solid #3d2020; }\\\n' +
+'.kimi-prov-status.success { display:block; background:#152d1a; color:#2ecc71; border:1px solid #1a3d22; }\\\n' +
+'.kimi-prov-status.info { display:block; background:#15202d; color:#3498db; border:1px solid #1a2a3d; }\\\n' +
+'.kimi-prov-badge { display:inline-block; padding:1px 8px; border-radius:8px; font-size:10px; font-weight:600; }\\\n' +
+'.kimi-prov-badge.ok { background:#1a3d22; color:#2ecc71; }\\\n' +
+'.kimi-prov-badge.warn { background:#3d3515; color:#f39c12; }\\\n' +
+'.kimi-prov-badge.err { background:#3d1515; color:#e74c3c; }\\\n' +
+'.kimi-prov-spinner { display:inline-block; width:12px; height:12px; border:2px solid #6c5ce7; border-radius:50%; border-top-color:transparent; animation:kimi-spin 0.6s linear infinite; vertical-align:middle; margin-right:6px; }\\\n' +
+'@keyframes kimi-spin { to { transform:rotate(360deg); } }\\\n' +
+'\'; document.head.appendChild(provModalStyle);\n' +
+'    }\n' +
+'    // Modal HTML\n' +
+'    provModal = document.createElement("div");\n' +
+'    provModal.id = "kimi-prov-modal";\n' +
+'    provModal.innerHTML = \'\\\n' +
+'<div class="kimi-prov-panel">\\\n' +
+'  <h2><span>&#9881;</span> Manage Providers <span id="kimi-prov-count">0</span><button class="kimi-prov-close" onclick="document.getElementById(\\\'kimi-prov-modal\\\').style.display=\\\'none\\\'">&times;</button></h2>\\\n' +
+'  <div id="kimi-prov-status" class="kimi-prov-status"></div>\\\n' +
+'  <div id="kimi-prov-list"></div>\\\n' +
+'  <div class="kimi-prov-add">\\\n' +
+'    <h3>+ Add New Provider</h3>\\\n' +
+'    <div class="row"><input id="kimi-prov-new-id" placeholder="Provider ID (e.g. my-provider)" /><input id="kimi-prov-new-type" placeholder="Type (openai)" value="openai" /></div>\\\n' +
+'    <div class="row"><input id="kimi-prov-new-url" placeholder="Base URL (e.g. https://api.example.com/v1)" /><input id="kimi-prov-new-key" placeholder="API Key (leave blank if public)" /></div>\\\n' +
+'    <button class="kimi-prov-btn primary" onclick="addNewProvider()">Add Provider &amp; Discover Models</button>\\\n' +
+'  </div>\\\n' +
+'  <div style="margin-top:10px;font-size:11px;color:#555;text-align:center">\\\n' +
+'    Config: <code>/root/.kimi-code/config.toml</code>&nbsp;&middot;&nbsp;Daemon auto-restarts on changes\\\n' +
+'  </div>\\\n' +
+'</div>\';\n' +
+'    document.body.appendChild(provModal);\n' +
+'  }\n' +
+'\n' +
+'  function setProvStatus(msg, type) {\n' +
+'    var el = document.getElementById("kimi-prov-status");\n' +
+'    if (!el) return;\n' +
+'    el.textContent = msg;\n' +
+'    el.className = "kimi-prov-status " + (type || "info");\n' +
+'  }\n' +
+'\n' +
+'  function reloadProviders() {\n' +
+'    var listEl = document.getElementById("kimi-prov-list");\n' +
+'    var countEl = document.getElementById("kimi-prov-count");\n' +
+'    if (!listEl) return;\n' +
+'    listEl.innerHTML = \'<div style="text-align:center;padding:20px;color:#888"><div class="kimi-prov-spinner"></div> Loading providers...</div>\';\n' +
+'    fetch("/kimi-admin/providers").then(function(r) { return r.json(); }).then(function(data) {\n' +
+'      if (!data.success || !data.providers) { listEl.innerHTML = \'<div style="color:#e74c3c;padding:10px">Failed to load providers</div>\'; return; }\n' +
+'      var provs = data.providers;\n' +
+'      if (countEl) countEl.textContent = provs.length;\n' +
+'      if (provs.length === 0) { listEl.innerHTML = \'<div style="color:#888;padding:20px;text-align:center">No providers configured. Add one below.</div>\'; return; }\n' +
+'      var html = "";\n' +
+'      for (var i = 0; i < provs.length; i++) {\n' +
+'        var p = provs[i];\n' +
+'        var badgeClass = p.model_count > 0 ? "ok" : "warn";\n' +
+'        var badgeText = p.model_count + " model" + (p.model_count !== 1 ? "s" : "");\n' +
+'        if (p.model_count === 0) badgeText = "no models";\n' +
+'        var statusDot = p.has_api_key ? \'<span style="color:#2ecc71">&#9679;</span>\' : \'<span style="color:#f39c12">&#9679;</span>\';\n' +
+'        html += \'<div class="kimi-prov-card"><div class="info"><div class="name">\' + statusDot + \' \' + escHtml(p.id) + \'</div><div class="meta">\' + escHtml(p.base_url || "") + \' | <span class="kimi-prov-badge \' + badgeClass + \'">\' + badgeText + \'</span></div></div><div class="actions">\' +\n' +
+'          \'<button class="kimi-prov-btn secondary sm" onclick="rediscoverProvider(\\\'\' + p.id + \'\\\')">Rediscover</button>\' +\n' +
+'          \'<button class="kimi-prov-btn danger sm" onclick="deleteProvider(\\\'\' + p.id + \'\\\')">Delete</button></div></div>\';\n' +
+'      }\n' +
+'      listEl.innerHTML = html;\n' +
+'    }).catch(function(err) {\n' +
+'      listEl.innerHTML = \'<div style="color:#e74c3c;padding:10px">Error: \' + err.message + \'</div>\';\n' +
+'    });\n' +
+'  }\n' +
+'\n' +
+'  function escHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }\n' +
+'\n' +
+'  // Wait for daemon to be healthy, then reload the page\n' +
+'  function waitForDaemonThenReload(maxTries) {\n' +
+'    if (maxTries === void 0) maxTries = 15;\n' +
+'    var tries = 0;\n' +
+'    function check() {\n' +
+'      tries++;\n' +
+'      setProvStatus("Waiting for daemon to restart (" + tries + "/" + maxTries + ")", "info");\n' +
+'      fetch("/health").then(function(r){ return r.json(); }).then(function(data){\n' +
+'        if (data.kimi_alive) {\n' +
+'          setProvStatus("Daemon ready, reloading...", "success");\n' +
+'          setTimeout(function(){ location.reload(); }, 500);\n' +
+'        } else {\n' +
+'          retryOrFail();\n' +
+'        }\n' +
+'      }).catch(function(){ retryOrFail(); });\n' +
+'    }\n' +
+'    function retryOrFail() {\n' +
+'      if (tries >= maxTries) {\n' +
+'        setProvStatus("Daemon not ready after " + maxTries + " tries. Please refresh manually.", "error");\n' +
+'      } else {\n' +
+'        setTimeout(check, 3000);\n' +
+'      }\n' +
+'    }\n' +
+'    check();\n' +
+'  }\n' +
+'\n' +
+'  // Helper: fetch a URL and wait for daemon health\n' +
+'  function waitForDaemonFetch(url, opts, statusMsg, cb) {\n' +
+'    setProvStatus(statusMsg + "...", "info");\n' +
+'    fetch(url, opts).then(function(r) { return r.json(); }).then(function(data) {\n' +
+'      if (data.success) {\n' +
+'        setProvStatus(statusMsg + " done. " + (data.daemon_restarting ? "Daemon restarting." : ""), "success");\n' +
+'        if (cb) cb(data);\n' +
+'      } else {\n' +
+'        setProvStatus("Error: " + (data.error || "unknown error"), "error");\n' +
+'        if (cb) cb(null);\n' +
+'      }\n' +
+'    }).catch(function(err) {\n' +
+'      setProvStatus("Network error: " + err.message, "error");\n' +
+'      if (cb) cb(null);\n' +
+'    });\n' +
+'  }\n' +
+'\n' +
+'  function addNewProvider() {\n' +
+'    var id = document.getElementById("kimi-prov-new-id").value.trim();\n' +
+'    var type = document.getElementById("kimi-prov-new-type").value.trim() || "openai";\n' +
+'    var url = document.getElementById("kimi-prov-new-url").value.trim();\n' +
+'    var key = document.getElementById("kimi-prov-new-key").value.trim();\n' +
+'    if (!id || !url) { setProvStatus("Provider ID and Base URL are required", "error"); return; }\n' +
+'    var btnEl = document.querySelector(".kimi-prov-add .kimi-prov-btn.primary");\n' +
+'    if (btnEl) { btnEl.disabled = true; btnEl.textContent = "Adding..."; }\n' +
+'    setProvStatus("Adding provider \\"" + id + "\\" and discovering models...", "info");\n' +
+'    fetch("/kimi-admin/providers", {\n' +
+'      method: "POST",\n' +
+'      headers: {"Content-Type": "application/json"},\n' +
+'      body: JSON.stringify({id: id, type: type, base_url: url, api_key: key})\n' +
+'    }).then(function(r) { return r.json(); }).then(function(data) {\n' +
+'      if (data.success) {\n' +
+'        var msg = "Provider \\"" + id + "\\" added successfully";\n' +
+'        if (data.models_discovered > 0) msg += " with " + data.models_discovered + " models";\n' +
+'        if (data.model_fetch_error) msg += " (model discovery warning: " + data.model_fetch_error + ")";\n' +
+'        setProvStatus(msg, "success");\n' +
+'        document.getElementById("kimi-prov-new-id").value = "";\n' +
+'        document.getElementById("kimi-prov-new-url").value = "";\n' +
+'        document.getElementById("kimi-prov-new-key").value = "";\n' +
+'        reloadProviders();\n' +
+'        // Wait for daemon restart then reload\n' +
+'        waitForDaemonThenReload();\n' +
+'      } else {\n' +
+'        setProvStatus("Error: " + (data.error || "unknown error"), "error");\n' +
+'      }\n' +
+'    }).catch(function(err) {\n' +
+'      setProvStatus("Network error: " + err.message, "error");\n' +
+'    }).finally(function() {\n' +
+'      if (btnEl) { btnEl.disabled = false; btnEl.textContent = "Add Provider & Discover Models"; }\n' +
+'    });\n' +
+'  }\n' + +
+'\n' +
+'  function rediscoverProvider(providerId) {\n' +
+'    setProvStatus("Rediscovering models for \\"" + providerId + "\\"...", "info");\n' +
+'    fetch("/kimi-admin/providers/" + encodeURIComponent(providerId) + "/rediscover", {\n' +
+'      method: "POST"\n' +
+'    }).then(function(r) { return r.json(); }).then(function(data) {\n' +
+'      if (data.success) {\n' +
+'        setProvStatus("Rediscovered " + data.models_discovered + " models for \\"" + providerId + "\\". " + (data.daemon_restarting ? "Daemon restarting." : ""), "success");\n' +
+'        reloadProviders();\n' +
+'        waitForDaemonThenReload();\n' +
+'      } else {\n' +
+'        setProvStatus("Error: " + (data.error || "unknown error"), "error");\n' +
+'      }\n' +
+'    }).catch(function(err) {\n' +
+'      setProvStatus("Network error: " + err.message, "error");\n' +
+'    });\n' +
+'  }\n' +
+'\n' +
+'  function deleteProvider(providerId) {\n' +
+'    if (!confirm("Delete provider \\"" + providerId + "\\" and all its models?")) return;\n' +
+'    setProvStatus("Deleting provider \\"" + providerId + "\\"...", "info");\n' +
+'    fetch("/kimi-admin/providers/" + encodeURIComponent(providerId), {\n' +
+'      method: "DELETE"\n' +
+'    }).then(function(r) { return r.json(); }).then(function(data) {\n' +
+'      if (data.success) {\n' +
+'        setProvStatus("Provider \\"" + providerId + "\\" deleted. " + (data.daemon_restarting ? "Daemon restarting." : ""), "success");\n' +
+'        reloadProviders();\n' +
+'        waitForDaemonThenReload();\n' +
+'      } else {\n' +
+'        setProvStatus("Error: " + (data.error || "unknown error"), "error");\n' +
+'      }\n' +
+'    }).catch(function(err) {\n' +
+'      setProvStatus("Network error: " + err.message, "error");\n' +
+'    });\n' +
+'  }\n' +
+'\n' +
+'  function openProvidersFull() {\n' +
+'    createProviderModal();\n' +
+'    provModal.style.display = "flex";\n' +
+'    reloadProviders();\n' +
+'    setProvStatus("", "");\n' +
+'  }\n' +
+'\n' +
+'  // ====== Open providers (try Vue first, fall back to modal) ======\n' +
+'  window.openProviderSettings = function() {\n' +
+'    if (!openProvidersVue()) {\n' +
+'      pLog("openProviders: Vue approach failed, opening modal");\n' +
+'      openProvidersFull();\n' +
+'    }\n' +
+'  };\n' +
+'\n' +
+'  // ====== Intercept /provider command ======\n' +
 '  window.addEventListener("keydown", function(e) {\n' +
 '    if (e.key === "Enter") {\n' +
 '      var t = e.target;\n' +
@@ -2221,61 +2601,125 @@ const server = http.createServer((req, res) => {
 '        e.preventDefault();\n' +
 '        e.stopPropagation();\n' +
 '        t.value = "";\n' +
-'        openProviders();\n' +
-'        return;\n' +
+'        window.openProviderSettings();\n' +
 '      }\n' +
 '    }\n' +
 '  }, true);\n' +
-'  // Helper: inject "Manage Providers" button before "Sign out" button\n' +
-'  function injectProvBtn() {\n' +
-'    var btns = document.querySelectorAll("button");\n' +
-'    for (var i = 0; i < btns.length; i++) {\n' +
-'      var btn = btns[i];\n' +
-'      if (btn.__provPatchDone) continue;\n' +
-'      if (btn.textContent.trim().toLowerCase() === "sign out") {\n' +
-'        var parent = btn.parentElement;\n' +
-'        if (!parent || parent.__provBtnAdded) continue;\n' +
-'        if (parent.querySelector(".prov-mgmt-btn")) continue;\n' +
-'        var newBtn = document.createElement("button");\n' +
-'        newBtn.type = "button";\n' +
-'        newBtn.className = "act prov-mgmt-btn";\n' +
-'        newBtn.textContent = "Manage Providers";\n' +
-'        newBtn.onclick = function() {\n' +
-'          var closeBtn = document.querySelector(\'[aria-label="Close (Esc)"]\');\n' +
-'          if (closeBtn) closeBtn.click();\n' +
-'          setTimeout(openProviders, 200);\n' +
-'        };\n' +
-'        parent.insertBefore(newBtn, btn);\n' +
-'        parent.__provBtnAdded = true;\n' +
+'\n' +
+'  // ====== Inject "Manage Providers" button in settings menu ======\n' +
+'  var provBtnInjected = false;\n' +
+'  var injectionAttempts = 0;\n' +
+'  function injectProvidersButton() {\n' +
+'    if (provBtnInjected) return;\n' +
+'    injectionAttempts++;\n' +
+'    if (injectionAttempts > 100) { provBtnInjected = true; return; }\n' +
+'    // Strategy 1: Find any element with Sign Out / Logout text (case-insensitive)\n' +
+'    var allElements = document.querySelectorAll("button, [role=button], a, span, div, li");\n' +
+'    for (var i = 0; i < allElements.length; i++) {\n' +
+'      var el = allElements[i];\n' +
+'      var txt = (el.textContent || "").trim().toLowerCase();\n' +
+'      var isSignOut = txt.indexOf("sign out") !== -1 || txt === "signout" || txt === "sign_out" ||\n' +
+'                     txt.indexOf("logout") !== -1 || txt === "log out";\n' +
+'      if (!isSignOut) continue;\n' +
+'      var parent = el.parentElement;\n' +
+'      if (!parent || parent.querySelector(".kimi-prov-injected-btn")) continue;\n' +
+'      var container = parent;\n' +
+'      for (var w = 0; w < 5; w++) {\n' +
+'        if (container.children && container.children.length >= 2) break;\n' +
+'        var p = container.parentElement;\n' +
+'        if (!p || p === document.body) break;\n' +
+'        container = p;\n' +
 '      }\n' +
-'      btn.__provPatchDone = true;\n' +
+'      var nb = document.createElement("button");\n' +
+'      nb.type = "button";\n' +
+'      nb.className = "act kimi-prov-injected-btn";\n' +
+'      nb.textContent = "Providers";\n' +
+'      Object.assign(nb.style, {\n' +
+'        cursor:"pointer",width:"100%",textAlign:"left",fontSize:"13px",fontWeight:"500",\n' +
+'        background:"transparent",color:"var(--accent-color,#6c5ce7)",\n' +
+'        border:"none",padding:"6px 12px"\n' +
+'      });\n' +
+'      nb.onmouseover = function(){this.style.background="rgba(108,92,231,0.1)";};\n' +
+'      nb.onmouseout = function(){this.style.background="transparent";};\n' +
+'      nb.onclick = function(ev){ev.preventDefault();ev.stopPropagation();window.openProviderSettings();};\n' +
+'      container.insertBefore(nb, el);\n' +
+'      provBtnInjected = true;\n' +
+'      pLog("Providers button injected near sign-out");\n' +
+'      return;\n' +
 '    }\n' +
+'    // Strategy 2: Find gear/cog SVG icons (settings button)\n' +
+'    if (!provBtnInjected) {\n' +
+'      var svgs = document.querySelectorAll("svg");\n' +
+'      for (var i = 0; i < svgs.length; i++) {\n' +
+'        var svg = svgs[i];\n' +
+'        var btn = svg.closest("button") || (svg.parentElement ? svg.parentElement.closest("button") : null);\n' +
+'        if (!btn) continue;\n' +
+'        var parent = btn.parentElement;\n' +
+'        if (!parent || parent.querySelector(".kimi-prov-injected-btn")) continue;\n' +
+'        var nb = document.createElement("button");\n' +
+'        nb.type = "button";\n' +
+'        nb.className = "kimi-prov-injected-btn";\n' +
+'        nb.textContent = "Providers";\n' +
+'        Object.assign(nb.style, {\n' +
+'          cursor:"pointer",marginLeft:"4px",fontSize:"11px",fontWeight:"500",\n' +
+'          background:"var(--accent-color,#6c5ce7)",color:"#fff",\n' +
+'          border:"none",borderRadius:"6px",padding:"2px 8px"\n' +
+'        });\n' +
+'        nb.onclick = function(ev){ev.preventDefault();ev.stopPropagation();window.openProviderSettings();};\n' +
+'        parent.insertBefore(nb, btn.nextSibling);\n' +
+'        provBtnInjected = true;\n' +
+'        pLog("Providers button injected near gear icon");\n' +
+'        break;\n' +
+'      }\n' +
+'    }\n' +
+'    ensureFloatingButton();\n' +
 '  }\n' +
-'  // Watch for settings dialog (MutationObserver)\n' +
-'  var obs = new MutationObserver(injectProvBtn);\n' +
-'  obs.observe(document.body, {childList: true, subtree: true});\n' +
-'  // Periodic fallback: re-check every 3s\n' +
-'  setInterval(injectProvBtn, 3000);\n' +
-'  // Floating "+" button as permanent fallback\n' +
-'  var floatingBtn = document.createElement("button");\n' +
-'  floatingBtn.id = "kimi-floating-prov-btn";\n' +
-'  floatingBtn.textContent = "+";\n' +
-'  floatingBtn.title = "Manage Providers";\n' +
-'  Object.assign(floatingBtn.style, {\n' +
-'    position: "fixed", bottom: "20px", right: "20px", zIndex: "99999",\n' +
-'    width: "44px", height: "44px", borderRadius: "50%",\n' +
-'    background: "#6c5ce7", color: "#fff", border: "none",\n' +
-'    fontSize: "24px", cursor: "pointer", boxShadow: "0 2px 12px rgba(108,92,231,0.4)",\n' +
-'    display: "none", alignItems: "center", justifyContent: "center"\n' +
-'  });\n' +
-'  floatingBtn.onclick = function() { openProviders(); };\n' +
-'  document.body.appendChild(floatingBtn);\n' +
-'  // Show floating button if settings injection never worked after 10s\n' +
-'  setTimeout(function() {\n' +
-'    if (!document.querySelector(".prov-mgmt-btn")) {\n' +
-'      floatingBtn.style.display = "flex";\n' +
+'\n' +
+'  var floatingBtn = null;\n' +
+'  function ensureFloatingButton() {\n' +
+'    if (floatingBtn) return;\n' +
+'    floatingBtn = document.createElement("button");\n' +
+'    floatingBtn.id = "kimi-floating-prov-btn";\n' +
+'    floatingBtn.title = "Manage Providers (Ctrl+Shift+P)";\n' +
+'    floatingBtn.innerHTML = \'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>\';\n' +
+'    Object.assign(floatingBtn.style, {\n' +
+'      position:"fixed",bottom:"76px",right:"20px",zIndex:"99999",\n' +
+'      width:"44px",height:"44px",borderRadius:"50%",\n' +
+'      background:"#6c5ce7",color:"#fff",border:"none",\n' +
+'      cursor:"pointer",boxShadow:"0 2px 12px rgba(108,92,231,0.5)",\n' +
+'      display:"flex",alignItems:"center",justifyContent:"center",\n' +
+'      transition:"all 0.2s",opacity:"0.9"\n' +
+'    });\n' +
+'    floatingBtn.onmouseover = function(){this.style.transform="scale(1.1)";this.style.boxShadow="0 4px 20px rgba(108,92,231,0.7)";};\n' +
+'    floatingBtn.onmouseout = function(){this.style.transform="scale(1)";this.style.boxShadow="0 2px 12px rgba(108,92,231,0.5)";};\n' +
+'    floatingBtn.onclick = function(){window.openProviderSettings();};\n' +
+'    document.body.appendChild(floatingBtn);\n' +
+'  }\n' +
+'\n' +
+'  // ====== Keyboard shortcut: Ctrl+Shift+P ======\n' +
+'  document.addEventListener("keydown", function(e) {\n' +
+'    if (e.ctrlKey && e.shiftKey && (e.key === "p" || e.key === "P")) {\n' +
+'      e.preventDefault();\n' +
+'      window.openProviderSettings();\n' +
 '    }\n' +
-'  }, 10000);\n' +
+'  });\n' +
+'\n' +
+'  // MutationObserver for dynamic settings panel\n' +
+'  var obs = new MutationObserver(function(){injectProvidersButton();});\n' +
+'  obs.observe(document.body, {childList:true, subtree:true, attributes:false});\n' +
+'  var injectTimer = setInterval(function(){\n' +
+'    injectProvidersButton();\n' +
+'    if (provBtnInjected) clearInterval(injectTimer);\n' +
+'  }, 1500);\n' +
+'  // Show floating button immediately (no delay)\n' +
+'  if (document.body) { ensureFloatingButton(); } else { document.addEventListener("DOMContentLoaded", ensureFloatingButton); }\n' +
+'\n' +
+'  // Also expose to window for debugging\n' +
+'  window.__kimiProviders = {\n' +
+'    open: window.openProviderSettings,\n' +
+'    reload: reloadProviders,\n' +
+'    modal: openProvidersFull\n' +
+'  };\n' +
 '})();\n' +
 '</script>';
           // WS redirect, workspace scripts, and provider fix — original Kimi Code UI preserved
