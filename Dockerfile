@@ -1,10 +1,6 @@
-FROM node:20-slim
+FROM diegosouzapw/omniroute:latest
 
-WORKDIR /app
-
-COPY package.json ./
-RUN npm install
-
+ENV PORT=10000
 EXPOSE 10000
 
-CMD ["npx", "omniroute", "serve"]
+CMD ["omniroute", "serve"]
