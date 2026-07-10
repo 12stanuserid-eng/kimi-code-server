@@ -1,19 +1,10 @@
-FROM node:20-slim
+# Use the official pre-built omniroute image
+FROM diegosouzapw/omniroute:latest
 
-WORKDIR /app
-
-COPY package.json ./
-
-# Install dependencies (better-sqlite3 needs native compilation so we need full install)
-RUN npm install --no-audit --no-fund
-
-# Set runtime env vars for Render
-ENV NODE_ENV=production
+# Override env vars to reduce memory for Render free plan
+ENV OMNIROUTE_MEMORY_MB=384
+ENV NODE_OPTIONS="--max-old-space-size=384"
 ENV PORT=10000
 ENV HOSTNAME=0.0.0.0
-ENV OMNIROUTE_MEMORY_MB=384
 
 EXPOSE 10000
-
-# Use node directly to run the local omniroute binary
-CMD ["node", "./node_modules/.bin/omniroute", "serve", "--port", "10000"]
