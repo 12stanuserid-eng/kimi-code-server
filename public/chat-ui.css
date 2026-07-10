@@ -105,6 +105,64 @@
   background: rgba(108,92,231,0.08);
 }
 
+.kc-login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: var(--kc-text-faint);
+  font-size: 12px;
+}
+
+.kc-login-divider::before,
+.kc-login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--kc-border);
+}
+
+.kc-token-login {
+  display: flex;
+  gap: 8px;
+}
+
+.kc-token-login input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius-sm);
+  background: var(--kc-bg);
+  color: var(--kc-text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--kc-transition);
+}
+
+.kc-token-login input:focus {
+  border-color: var(--kc-accent);
+  box-shadow: 0 0 0 2px rgba(108,92,231,0.12);
+}
+
+.kc-token-btn {
+  padding: 10px 18px;
+  border: none;
+  border-radius: var(--kc-radius-sm);
+  background: var(--kc-accent);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--kc-transition);
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.kc-token-btn:hover {
+  background: var(--kc-accent-hover);
+}
+
 .kc-login-error {
   display: none;
   color: var(--kc-danger);
