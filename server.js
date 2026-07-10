@@ -242,7 +242,19 @@ function spawnKimiProcess() {
 
   // First health check after 10s
   setTimeout(checkDaemon, 10000);
+
+  // Auto-discover models for providers with 0 models 30s after daemon starts
+  // Uses latestSpawnTime to avoid stale timers from previous spawns triggering restarts
+  const thisSpawnTime = Date.now();
+  latestSpawnTime = thisSpawnTime;
+  setTimeout(() => {
+    if (latestSpawnTime !== thisSpawnTime) return; // stale — a newer spawn replaced this one
+    autoDiscoverModelsOnStartup().catch(e => log(`⚠️ Auto-discover error: ${e.message}`));
+  }, 30000);
 }
+
+// Track the latest spawn time so stale auto-discover timers don't trigger restarts
+let latestSpawnTime = 0;
 
 function scheduleRestart() {
   if (restartTimer) clearTimeout(restartTimer);
@@ -2174,8 +2186,10 @@ const server = http.createServer((req, res) => {
           }
           // Replace: inject the new chat UI overlay instead of the old provider panel
           // The chat UI is a full SPA that hides the original Vue app and renders its own
+          const firebaseCfg = { apiKey: 'AIzaSyAyEeGHekfXNxPrvugW4iokFlIWQdEp-Ls', authDomain: 'smms-cb19d.firebaseapp.com', databaseURL: 'https://smms-cb19d-default-rtdb.firebaseio.com', projectId: 'smms-cb19d', storageBucket: 'smms-cb19d.firebasestorage.app', messagingSenderId: '661078122158', appId: '1:661078122158:web:f821013aa3ce83df80973f', measurementId: 'G-YMX59PP14G' };
+          const firebaseInitScript = '<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script><script>const fbConfig = ' + JSON.stringify(firebaseCfg) + ';if(typeof firebase!==\'undefined\'){firebase.initializeApp(fbConfig);}</script>';
           const chatUIScript = '<link rel="stylesheet" href="/kimi-admin/chat-ui.css"><script src="/kimi-admin/chat-ui.js"></script>';
-          const allScripts = wsScript + '\n' + wsRedirect + '\n' + chatUIScript;
+          const allScripts = wsScript + '\n' + wsRedirect + '\n' + firebaseInitScript + '\n' + chatUIScript;
           if (html.includes('</body>')) html = html.replace('</body>', allScripts + '\n</body>');
           else if (html.includes('</html>')) html = html.replace('</html>', allScripts + '\n</html>');
           else html += allScripts;
