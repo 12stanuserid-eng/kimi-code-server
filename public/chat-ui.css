@@ -1,93 +1,87 @@
-/* ====== Kimi AI Chat UI — Exact Match to kimi.moonshot.cn ====== */
+/* ====== Kimi Code Chat UI — Dark Theme ====== */
 
-/* Variables — exact Kimi design tokens */
+/* Variables */
 :root {
-  --kc-primary: #1783FF;
-  --kc-primary-hover: rgb(22, 127, 247);
-  --kc-primary-active: rgb(22, 124, 242);
-  --kc-danger: #FF3849;
-  --kc-success: #16C456;
-  --kc-bg: #FFFFFF;
-  --kc-bg-secondary: #F5F5F5;
-  --kc-surface: #FFFFFF;
-  --kc-surface-raised: #FAFAFA;
-  --kc-border: rgba(0,0,0,0.13);
-  --kc-text-primary: rgba(0,0,0,0.9);
-  --kc-text-secondary: rgba(0,0,0,0.6);
-  --kc-text-tertiary: rgba(0,0,0,0.45);
-  --kc-text-quaternary: rgba(0,0,0,0.3);
-  --kc-fill-hover: rgba(0,0,0,0.03);
-  --kc-fill-active: rgba(0,0,0,0.06);
+  --kc-bg: #0d1117;
+  --kc-surface: #161b22;
+  --kc-surface-raised: #1c2333;
+  --kc-border: #2d333b;
+  --kc-text: #e6edf3;
+  --kc-text-secondary: #8b949e;
+  --kc-text-faint: #6b7280;
+  --kc-accent: #6c5ce7;
+  --kc-accent-hover: #7c6cf7;
+  --kc-user-bubble: #1c2333;
+  --kc-user-bubble-border: #2d333b;
+  --kc-assistant-bubble: #161b22;
+  --kc-danger: #f85149;
+  --kc-danger-hover: #da3633;
   --kc-sidebar-width: 280px;
   --kc-header-height: 52px;
-  --kc-radius: 8px;
-  --kc-radius-lg: 12px;
-  --kc-radius-xl: 16px;
+  --kc-composer-height: auto;
+  --kc-radius: 10px;
+  --kc-radius-sm: 6px;
+  --kc-transition: 0.2s ease;
   --kc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --kc-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
-  --kc-transition: 0.18s ease;
 }
 
-/* Root — full overlay */
+/* Root */
 #kc-root {
   all: initial;
   position: fixed;
   inset: 0;
   z-index: 99999;
   font-family: var(--kc-font);
-  color: var(--kc-text-primary);
+  color: var(--kc-text);
   background: var(--kc-bg);
   display: flex;
   flex-direction: column;
 }
 
-#kc *, #kc *::before, #kc *::after {
+#kc-root *, #kc-root *::before, #kc-root *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-/* ====== LOGIN MODAL — Exact Kimi style ====== */
+/* ====== LOGIN SCREEN ====== */
 #kc-login {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
   padding: 24px;
-  background: var(--kc-bg-secondary);
+  background: radial-gradient(ellipse at center, rgba(108,92,231,0.08) 0%, transparent 70%);
 }
 
 .kc-login-card {
   width: 100%;
-  max-width: 400px;
-  background: var(--kc-bg);
+  max-width: 380px;
+  background: var(--kc-surface);
   border: 1px solid var(--kc-border);
-  border-radius: var(--kc-radius-xl);
-  padding: 40px 32px;
+  border-radius: 16px;
+  padding: 36px 28px;
   text-align: center;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
 }
 
 .kc-logo {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .kc-login-title {
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 30px;
-  color: var(--kc-text-primary);
-  margin-bottom: 4px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--kc-text);
+  margin-bottom: 6px;
 }
 
 .kc-login-subtitle {
   font-size: 14px;
-  line-height: 20px;
-  color: var(--kc-text-tertiary);
-  margin-bottom: 32px;
+  color: var(--kc-text-secondary);
+  margin-bottom: 28px;
 }
 
-/* Google button — Kimi style */
 .kc-google-btn {
   display: flex;
   align-items: center;
@@ -96,35 +90,29 @@
   width: 100%;
   padding: 12px 16px;
   border: 1px solid var(--kc-border);
-  border-radius: var(--kc-radius-lg);
-  background: var(--kc-bg);
-  color: var(--kc-text-primary);
+  border-radius: var(--kc-radius);
+  background: var(--kc-surface-raised);
+  color: var(--kc-text);
   font-size: 14px;
   font-weight: 500;
-  line-height: 20px;
   cursor: pointer;
   transition: all var(--kc-transition);
   font-family: inherit;
 }
 
 .kc-google-btn:hover {
-  background: var(--kc-fill-hover);
-  border-color: rgba(0,0,0,0.2);
-}
-
-.kc-google-btn:active {
-  background: var(--kc-fill-active);
+  border-color: var(--kc-accent);
+  background: rgba(108,92,231,0.08);
 }
 
 .kc-login-error {
   display: none;
   color: var(--kc-danger);
   font-size: 12px;
-  line-height: 18px;
-  margin-top: 16px;
+  margin-top: 14px;
   padding: 8px 12px;
-  background: rgba(255,56,73,0.06);
-  border-radius: var(--kc-radius);
+  background: rgba(248,81,73,0.08);
+  border-radius: var(--kc-radius-sm);
 }
 
 /* ====== APP SHELL ====== */
@@ -134,11 +122,11 @@
   overflow: hidden;
 }
 
-/* ====== SIDEBAR — Kimi style ====== */
+/* ====== SIDEBAR ====== */
 #kc-sidebar {
   width: var(--kc-sidebar-width);
   min-width: var(--kc-sidebar-width);
-  background: var(--kc-bg-secondary);
+  background: var(--kc-surface);
   border-right: 1px solid var(--kc-border);
   display: flex;
   flex-direction: column;
@@ -155,23 +143,24 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   padding: 10px;
-  border: none;
+  border: 1px solid var(--kc-border);
   border-radius: var(--kc-radius);
-  background: var(--kc-bg);
-  color: var(--kc-text-primary);
+  background: var(--kc-surface-raised);
+  color: var(--kc-text);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--kc-transition);
   font-family: inherit;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
 .kc-new-chat-btn:hover {
-  background: var(--kc-fill-hover);
+  border-color: var(--kc-accent);
+  background: rgba(108,92,231,0.08);
+  color: var(--kc-accent);
 }
 
 .kc-chat-list {
@@ -190,10 +179,10 @@
 
 .kc-chat-empty {
   text-align: center;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
   font-size: 13px;
-  line-height: 18px;
   padding: 32px 16px;
+  line-height: 1.5;
 }
 
 .kc-chat-item {
@@ -201,7 +190,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 10px 10px;
-  border-radius: var(--kc-radius);
+  border-radius: var(--kc-radius-sm);
   cursor: pointer;
   transition: background var(--kc-transition);
   position: relative;
@@ -209,11 +198,14 @@
 }
 
 .kc-chat-item:hover {
-  background: var(--kc-fill-hover);
+  background: var(--kc-surface-raised);
 }
 
 .kc-chat-item.active {
-  background: rgba(23,131,255,0.06);
+  background: rgba(108,92,231,0.1);
+  border: 1px solid rgba(108,92,231,0.2);
+  margin: -1px;
+  margin-bottom: 1px;
 }
 
 .kc-chat-item-info {
@@ -224,8 +216,7 @@
 .kc-chat-item-title {
   font-size: 13px;
   font-weight: 500;
-  line-height: 18px;
-  color: var(--kc-text-primary);
+  color: var(--kc-text);
   margin-bottom: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -234,8 +225,7 @@
 
 .kc-chat-item-preview {
   font-size: 11px;
-  line-height: 16px;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -251,8 +241,7 @@
 
 .kc-chat-item-time {
   font-size: 10px;
-  line-height: 14px;
-  color: var(--kc-text-quaternary);
+  color: var(--kc-text-faint);
 }
 
 .kc-chat-item-del {
@@ -264,7 +253,7 @@
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
   cursor: pointer;
   opacity: 0;
   transition: all var(--kc-transition);
@@ -276,7 +265,7 @@
 
 .kc-chat-item-del:hover {
   color: var(--kc-danger);
-  background: rgba(255,56,73,0.08);
+  background: rgba(248,81,73,0.1);
 }
 
 /* Sidebar footer */
@@ -307,8 +296,6 @@
 #kc-username {
   font-size: 13px;
   font-weight: 500;
-  line-height: 18px;
-  color: var(--kc-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -321,9 +308,9 @@
   width: 32px;
   height: 32px;
   border: none;
-  border-radius: var(--kc-radius);
+  border-radius: var(--kc-radius-sm);
   background: transparent;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
   cursor: pointer;
   transition: all var(--kc-transition);
   flex-shrink: 0;
@@ -331,7 +318,7 @@
 
 .kc-logout-btn:hover {
   color: var(--kc-danger);
-  background: rgba(255,56,73,0.08);
+  background: rgba(248,81,73,0.1);
 }
 
 /* ====== MAIN CONTENT ====== */
@@ -341,18 +328,17 @@
   flex-direction: column;
   min-width: 0;
   position: relative;
-  background: var(--kc-bg);
 }
 
 /* Header */
 .kc-header {
-  display: none;
+  display: none; /* hidden by default — only visible on mobile */
   align-items: center;
   gap: 10px;
   height: var(--kc-header-height);
   padding: 0 16px;
   border-bottom: 1px solid var(--kc-border);
-  background: var(--kc-bg);
+  background: var(--kc-surface);
   flex-shrink: 0;
 }
 
@@ -363,21 +349,19 @@
   width: 36px;
   height: 36px;
   border: none;
-  border-radius: var(--kc-radius);
+  border-radius: var(--kc-radius-sm);
   background: transparent;
-  color: var(--kc-text-primary);
+  color: var(--kc-text);
   cursor: pointer;
 }
 
 .kc-menu-btn:hover {
-  background: var(--kc-fill-hover);
+  background: var(--kc-surface-raised);
 }
 
 .kc-header-title {
   font-size: 15px;
   font-weight: 600;
-  line-height: 22px;
-  color: var(--kc-text-primary);
 }
 
 .kc-header-right {
@@ -388,6 +372,7 @@
 .kc-chat-view {
   flex: 1;
   overflow-y: auto;
+  padding: 0;
   display: flex;
   flex-direction: column;
 }
@@ -409,49 +394,43 @@
   height: 100%;
   text-align: center;
   padding: 40px;
-  gap: 10px;
+  gap: 12px;
 }
 
 .kc-empty-state h2 {
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 30px;
-  color: var(--kc-text-primary);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--kc-text);
 }
 
 .kc-empty-state p {
   font-size: 14px;
-  line-height: 20px;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-secondary);
   max-width: 280px;
 }
 
 /* Messages */
 .kc-messages {
   flex: 1;
-  padding: 20px 24px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-width: 768px;
-  width: 100%;
-  margin: 0 auto;
+  gap: 8px;
 }
 
 .kc-loading {
   text-align: center;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
   font-size: 13px;
-  line-height: 18px;
   padding: 40px;
 }
 
 .kc-welcome-msg {
   text-align: center;
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
   font-size: 14px;
-  line-height: 20px;
   padding: 60px 20px;
+  line-height: 1.6;
 }
 
 .kc-msg {
@@ -477,8 +456,8 @@
 }
 
 .kc-msg-error .kc-msg-content {
-  background: rgba(255,56,73,0.06);
-  border: 1px solid rgba(255,56,73,0.15);
+  background: rgba(248,81,73,0.08);
+  border: 1px solid rgba(248,81,73,0.2);
   color: var(--kc-danger);
   max-width: 100%;
   text-align: center;
@@ -487,7 +466,7 @@
 .kc-msg-content {
   max-width: 75%;
   padding: 10px 14px;
-  border-radius: var(--kc-radius-lg);
+  border-radius: 12px;
   font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -495,14 +474,15 @@
 }
 
 .kc-msg-user .kc-msg-content {
-  background: var(--kc-primary);
-  color: #fff;
+  background: var(--kc-user-bubble);
+  border: 1px solid var(--kc-user-bubble-border);
   border-bottom-right-radius: 4px;
+  color: var(--kc-text);
 }
 
 .kc-msg-assistant .kc-msg-content {
-  background: var(--kc-bg-secondary);
-  color: var(--kc-text-primary);
+  background: var(--kc-assistant-bubble);
+  border: 1px solid var(--kc-border);
   border-bottom-left-radius: 4px;
 }
 
@@ -518,9 +498,8 @@
 .kc-msg-markdown h3 {
   font-size: 15px;
   font-weight: 600;
-  line-height: 22px;
   margin: 12px 0 6px;
-  color: var(--kc-text-primary);
+  color: var(--kc-text);
 }
 
 .kc-msg-markdown ul, .kc-msg-markdown ol {
@@ -530,20 +509,19 @@
 
 .kc-msg-markdown li {
   margin-bottom: 3px;
-  line-height: 1.6;
 }
 
 .kc-msg-markdown blockquote {
-  border-left: 3px solid var(--kc-primary);
+  border-left: 3px solid var(--kc-accent);
   padding: 6px 12px;
   margin: 8px 0;
   color: var(--kc-text-secondary);
-  background: rgba(23,131,255,0.04);
-  border-radius: 0 var(--kc-radius) var(--kc-radius) 0;
+  background: rgba(108,92,231,0.04);
+  border-radius: 0 4px 4px 0;
 }
 
 .kc-msg-markdown a {
-  color: var(--kc-primary);
+  color: var(--kc-accent);
   text-decoration: none;
 }
 
@@ -559,14 +537,10 @@
   font-style: italic;
 }
 
-.kc-msg-markdown pre {
-  margin: 8px 0;
-}
-
 /* Inline code */
 .kc-inline-code {
-  background: rgba(0,0,0,0.04);
-  color: var(--kc-text-primary);
+  background: #1f2937;
+  color: #e6edf3;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 13px;
@@ -575,9 +549,9 @@
 
 /* Code blocks */
 .kc-code-block {
-  background: #f6f8fa;
+  background: #0f172a;
   border: 1px solid var(--kc-border);
-  border-radius: var(--kc-radius-lg);
+  border-radius: 8px;
   padding: 14px 16px;
   margin: 8px 0;
   overflow-x: auto;
@@ -590,7 +564,7 @@
   background: none;
   padding: 0;
   font-size: inherit;
-  color: var(--kc-text-primary);
+  color: var(--kc-text);
 }
 
 /* Streaming indicator */
@@ -598,27 +572,43 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 24px;
-  background: var(--kc-bg);
+  padding: 8px 20px;
+  background: var(--kc-surface);
   border-top: 1px solid var(--kc-border);
   font-size: 12px;
-  line-height: 18px;
-  color: var(--kc-text-tertiary);
-  max-width: 768px;
-  width: 100%;
-  margin: 0 auto;
+  color: var(--kc-text-faint);
+}
+
+.kc-dot-pulse {
+  display: flex;
+  gap: 3px;
+}
+
+.kc-dot-pulse span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--kc-accent);
+  animation: kc-dot 1.2s ease-in-out infinite;
+}
+
+.kc-dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+.kc-dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes kc-dot {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.2); }
 }
 
 .kc-stop-btn {
   margin-left: auto;
   padding: 4px 12px;
   border: 1px solid var(--kc-border);
-  border-radius: var(--kc-radius);
+  border-radius: var(--kc-radius-sm);
   background: transparent;
-  color: var(--kc-text-primary);
+  color: var(--kc-text);
   font-size: 11px;
   font-weight: 500;
-  line-height: 16px;
   cursor: pointer;
   transition: all var(--kc-transition);
   font-family: inherit;
@@ -629,29 +619,26 @@
   color: var(--kc-danger);
 }
 
-/* Composer — Kimi style chat input */
+/* Composer */
 .kc-composer {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 12px 24px 20px;
+  padding: 12px 20px 16px;
   border-top: 1px solid var(--kc-border);
-  background: var(--kc-bg);
-  max-width: 768px;
-  width: 100%;
-  margin: 0 auto;
+  background: var(--kc-surface);
 }
 
 .kc-input {
   flex: 1;
   padding: 10px 14px;
   border: 1px solid var(--kc-border);
-  border-radius: var(--kc-radius-lg);
-  background: var(--kc-bg-secondary);
-  color: var(--kc-text-primary);
+  border-radius: var(--kc-radius);
+  background: var(--kc-bg);
+  color: var(--kc-text);
   font-size: 14px;
-  line-height: 1.5;
   font-family: inherit;
+  line-height: 1.5;
   resize: none;
   outline: none;
   max-height: 200px;
@@ -659,12 +646,12 @@
 }
 
 .kc-input:focus {
-  border-color: var(--kc-primary);
-  box-shadow: 0 0 0 2px rgba(23,131,255,0.1);
+  border-color: var(--kc-accent);
+  box-shadow: 0 0 0 2px rgba(108,92,231,0.12);
 }
 
 .kc-input::placeholder {
-  color: var(--kc-text-tertiary);
+  color: var(--kc-text-faint);
 }
 
 .kc-send-btn {
@@ -675,7 +662,7 @@
   height: 38px;
   border: none;
   border-radius: var(--kc-radius);
-  background: var(--kc-primary);
+  background: var(--kc-accent);
   color: white;
   cursor: pointer;
   transition: all var(--kc-transition);
@@ -683,7 +670,8 @@
 }
 
 .kc-send-btn:hover:not(:disabled) {
-  background: var(--kc-primary-hover);
+  background: var(--kc-accent-hover);
+  transform: scale(1.05);
 }
 
 .kc-send-btn:disabled {
@@ -700,7 +688,7 @@
     bottom: 0;
     z-index: 100;
     transform: translateX(-100%);
-    box-shadow: 2px 0 16px rgba(0,0,0,0.08);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.4);
   }
 
   #kc-sidebar.kc-sidebar-open {
