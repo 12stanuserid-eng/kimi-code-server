@@ -1,12 +1,19 @@
-FROM node:20-alpine
+FROM node:20-slim
 
-RUN apk add --no-cache git && \
-    npm install -g omniroute@3.8.46
+WORKDIR /app
 
+COPY package.json ./
+
+# Install dependencies (better-sqlite3 needs native compilation so we need full install)
+RUN npm install --no-audit --no-fund
+
+# Set runtime env vars for Render
+ENV NODE_ENV=production
 ENV PORT=10000
+ENV HOSTNAME=0.0.0.0
+ENV OMNIROUTE_MEMORY_MB=384
+
 EXPOSE 10000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:10000/api/monitoring/health || exit 1
-
-CMD ["omniroute", "serve"]
+# Use node directly to run the local omniroute binary
+CMD ["node", "./node_modules/.bin/omniroute", "serve", "--port", "10000"]
