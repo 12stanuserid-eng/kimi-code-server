@@ -784,6 +784,18 @@ function regenerateSessionIndex() {
 
     log('🔧 [regenerateSessionIndex] Starting...');
 
+    // ═══ BACKUP existing session_index.jsonl BEFORE regenerating ═══
+    // This ensures we can always recover if something goes wrong
+    try {
+      const currentIndex = fs.readFileSync(indexPath, 'utf8').trim();
+      if (currentIndex.length > 0) {
+        fs.writeFileSync(SESSION_INDEX_BACKUP, currentIndex, 'utf8');
+        log(`💾 Backed up existing session_index.jsonl before regeneration (${currentIndex.split('\n').length} entries)`);
+      }
+    } catch(e) {
+      log(`⚠️ Could not backup existing session index: ${e.message}`);
+    }
+
     // Read workspaces.json to map bucket IDs → workspace root paths (workDir)
     const wsMap = {}; // bucketId -> workDir (absolute path)
     try {
@@ -1862,6 +1874,245 @@ const server = http.createServer((req, res) => {
     }));
   }
 
+  // ====== ADMIN UI PAGE — Provider Management ======
+  // GET /kimi-admin or /kimi-admin/ — full HTML page for managing providers
+  if ((req.url === '/kimi-admin' || req.url === '/kimi-admin/') && req.method === 'GET') {
+    const providers = readProvidersFromConfig();
+    let configLines = [];
+    try { configLines = fs.readFileSync(getConfigPath(), 'utf8').split('\n'); } catch(e) {}
+    const list = Object.values(providers).map(p => {
+      let modelCount = 0;
+      for (let i = 0; i < configLines.length; i++) {
+        const line = configLines[i];
+        if (line.includes('[models.') && line.includes(p.id + '-')) modelCount++;
+      }
+      return {
+        id: p.id, type: p.type, base_url: p.baseUrl,
+        has_api_key: !!p.apiKey && p.apiKey !== 'no-auth-required',
+        api_key_masked: maskKey(p.apiKey), model_count: modelCount
+      };
+    });
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kimi Code — Provider Management</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f0f0f;color:#e0e0e0;min-height:100vh}
+.container{max-width:900px;margin:0 auto;padding:24px}
+h1{font-size:24px;font-weight:600;margin-bottom:4px;color:#fff}
+.sub{color:#888;font-size:14px;margin-bottom:24px}
+.card{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;padding:20px;margin-bottom:16px}
+.card h2{font-size:16px;font-weight:500;margin-bottom:12px;color:#6c5ce7}
+.providers-list{display:grid;gap:8px}
+.provider-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#252540;border-radius:8px;cursor:pointer;transition:background 0.15s}
+.provider-item:hover{background:#2d2d50}
+.provider-name{font-weight:500;color:#fff}
+.provider-meta{color:#888;font-size:12px}
+.provider-models{color:#6c5ce7;font-size:12px;font-weight:500}
+.add-btn{display:inline-flex;align-items:center;gap:6px;background:#6c5ce7;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:14px;font-weight:500;cursor:pointer;transition:background 0.15s;margin-top:8px}
+.add-btn:hover{background:#5a4bd1}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:13px;color:#aaa;margin-bottom:4px;font-weight:500}
+.form-group input{width:100%;padding:10px 12px;background#1e1e38;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;outline:none}
+.form-group input:focus{border-color:#6c5ce7}
+.btn-row{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.btn{background:#6c5ce7;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s}
+.btn:hover{background:#5a4bd1}
+.btn-danger{background:#e74c3c}
+.btn-danger:hover{background:#c0392b}
+.btn-secondary{background:#333}
+.btn-secondary:hover{background:#444}
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:100000;align-items:center;justify-content:center}
+.modal.active{display:flex}
+.modal-content{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:16px;padding:24px;width:90%;max-width:500px;max-height:80vh;overflow-y:auto}
+.modal-content h2{margin-bottom:16px;color:#fff;font-size:18px}
+.model-list{max-height:200px;overflow-y:auto;background:#1e1e30;border-radius:8px;padding:8px;margin-top:8px}
+.model-tag{display:inline-block;background:#252540;color:#ccc;padding:3px 8px;border-radius:4px;font-size:11px;margin:2px}
+.toast{position:fixed;bottom:80px;right:20px;background:#1a1a2e;border:1px solid #333;color:#e0e0e0;padding:12px 20px;border-radius:10px;font-size:13px;z-index:200000;opacity:0;transition:opacity 0.3s}
+.toast.show{opacity:1}
+.hidden{display:none}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #333;border-radius:50%;border-top-color:#6c5ce7;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty-state{text-align:center;padding:30px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔧 Provider Management</h1>
+  <div class="sub">Manage AI model providers for Kimi Code</div>
+  <div class="card">
+    <h2>Installed Providers</h2>
+    <div id="providerList" class="providers-list"><div class="empty-state">Loading...</div></div>
+    <button class="add-btn" onclick="showAddForm()">+ Add Provider</button>
+  </div>
+  <div id="addForm" class="hidden card">
+    <h2>Add New Provider</h2>
+    <div class="form-group"><label>Provider ID (unique, e.g. "my-provider")</label><input id="newId" placeholder="my-provider"></div>
+    <div class="form-group"><label>Base URL</label><input id="newUrl" placeholder="https://api.example.com/v1"></div>
+    <div class="form-group"><label>API Key (optional)</label><input id="newKey" placeholder="sk-..."></div>
+    <div class="form-group"><label>Type</label><input id="newType" value="openai" placeholder="openai"></div>
+    <div class="btn-row">
+      <button class="btn" onclick="saveProvider()">Save & Discover Models</button>
+      <button class="btn-secondary" onclick="hideAddForm()">Cancel</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Actions</h2>
+    <div class="btn-row">
+      <button class="btn" onclick="restartDaemon()">🔄 Restart Daemon</button>
+      <button class="btn" onclick="backupNow()">💾 Backup Now</button>
+      <button class="btn" onclick="restoreFrom('pentaract')">📥 Restore from Pentaract</button>
+      <button class="btn" onclick="location.href='/'">← Back to Chat</button>
+    </div>
+    <div id="actionStatus" style="margin-top:8px;font-size:12px;color:#888"></div>
+  </div>
+</div>
+
+<div id="modelsModal" class="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-content">
+    <h2 id="modalTitle">Models</h2>
+    <div id="modalModels" class="model-list"></div>
+    <div class="btn-row"><button class="btn" onclick="closeModal()">Close</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/kimi-admin';
+function $(id){return document.getElementById(id)}
+function pLog(m){console.log('[KimiAdmin]',m)}
+
+function showToast(msg,isErr){
+  const t=$('toast');t.textContent=msg;t.className='toast show';
+  if(isErr) t.style.borderColor='#e74c3c'; else t.style.borderColor='#333';
+  setTimeout(()=>{t.className='toast'},3000);
+}
+
+async function loadProviders(){
+  try{
+    const r=await fetch(API+'/providers');
+    const d=await r.json();
+    if(!d.success) throw new Error(d.error||'Failed');
+    renderProviders(d.providers);
+  }catch(e){pLog('loadProviders error:'+e.message);showToast('Error loading providers: '+e.message,true)}
+}
+
+function renderProviders(providers){
+  const list=$('providerList');
+  if(!providers||providers.length===0){
+    list.innerHTML='<div class="empty-state">No providers configured yet. Click "+ Add Provider" to add one.</div>';
+    return;
+  }
+  list.innerHTML=providers.map(p=>\`<div class="provider-item" onclick="showProviderDetail('\${p.id}')">
+    <div>
+      <div class="provider-name">\${p.id}</div>
+      <div class="provider-meta">\${p.type} · \${p.base_url}</div>
+    </div>
+    <div style="text-align:right">
+      <div class="provider-models">\${p.model_count||0} models</div>
+      <div class="provider-meta">\${p.has_api_key?'🔑 Key set':'⚠️ No key'}</div>
+    </div>
+  </div>\`).join('');
+}
+
+async function showProviderDetail(id){
+  try{
+    const r=await fetch(API+'/providers/'+encodeURIComponent(id)+'/models');
+    const d=await r.json();
+    $('modalTitle').textContent='Models — '+id;
+    $('modalModels').innerHTML=d.models&&d.models.length>0
+      ? d.models.map(m=>\`<span class="model-tag">\${m}</span>\`).join('')
+      : '<div style="color:#666;font-size:13px">No models found. Click Rediscover.</div>';
+    $('modelsModal').className='modal active';
+    $('modalModels').innerHTML+=(
+      '<div class="btn-row" style="margin-top:12px">'+
+      '<button class="btn" onclick="rediscover(\''+id+'\')">🔄 Rediscover Models</button>'+
+      '<button class="btn btn-danger" onclick="deleteProvider(\''+id+'\')">🗑 Delete Provider</button>'+
+      '</div>'
+    );
+  }catch(e){showToast('Error: '+e.message,true)}
+}
+
+function closeModal(){$('modelsModal').className='modal'}
+
+function showAddForm(){$('addForm').className='card';$('newId').focus()}
+function hideAddForm(){$('addForm').className='hidden card'}
+
+async function saveProvider(){
+  const id=$('newId').value.trim(),url=$('newUrl').value.trim(),key=$('newKey').value.trim(),type=$('newType').value.trim()||'openai';
+  if(!id||!url){showToast('Provider ID and Base URL are required',true);return}
+  const btn=event.target;btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Saving...';
+  try{
+    const r=await fetch(API+'/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,base_url:url,api_key:key,type})});
+    const d=await r.json();
+    if(!d.success) throw new Error(d.error||'Failed to save');
+    showToast(d.message||'Saved!');
+    hideAddForm();
+    $('newId').value='';$('newUrl').value='';$('newKey').value='';
+    setTimeout(loadProviders,2000);
+  }catch(e){showToast('Error: '+e.message,true)}
+  finally{btn.disabled=false;btn.innerHTML='Save & Discover Models'}
+}
+
+async function rediscover(id){
+  const btn=event.target;btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Discovering...';
+  try{
+    const r=await fetch(API+'/providers/'+encodeURIComponent(id)+'/rediscover',{method:'POST'});
+    const d=await r.json();
+    showToast(d.message||'Done!');
+    setTimeout(()=>showProviderDetail(id),2000);
+  }catch(e){showToast('Error: '+e.message,true)}
+  finally{btn.disabled=false;btn.innerHTML='🔄 Rediscover Models'}
+}
+
+async function deleteProvider(id){
+  if(!confirm('Delete provider "'+id+'"?'))return;
+  try{
+    const r=await fetch(API+'/providers/'+encodeURIComponent(id),{method:'DELETE'});
+    const d=await r.json();
+    showToast(d.message||'Deleted!');
+    closeModal();
+    setTimeout(loadProviders,1000);
+  }catch(e){showToast('Error: '+e.message,true)}
+}
+
+async function restartDaemon(){
+  try{
+    const r=await fetch(API+'/restart-daemon',{method:'POST'});
+    const d=await r.json();
+    showToast(d.message||'Restarting...');
+  }catch(e){showToast('Error: '+e.message,true)}
+}
+
+async function backupNow(){
+  try{
+    const r=await fetch(API+'/backup-now',{method:'POST'});
+    const d=await r.json();
+    showToast(d.message||(d.success?'Backup done!':'Backup failed'));
+  }catch(e){showToast('Error: '+e.message,true)}
+}
+
+async function restoreFrom(src){
+  $('actionStatus').textContent='Restoring from '+src+'...';
+  try{
+    const r=await fetch(API+'/backup-restore?source='+src,{method:'POST'});
+    const d=await r.json();
+    $('actionStatus').textContent=d.message||'Restore '+(d.success?'done':'failed');
+  }catch(e){$('actionStatus').textContent='Error: '+e.message}
+}
+
+loadProviders();
+</script>
+</body>
+</html>`;
+    res.writeHead(200, {'Content-Type': 'text/html', 'Content-Length': Buffer.byteLength(html)});
+    return res.end(html);
+  }
+
   // ====== ADMIN API — Provider Management ======
   // These endpoints bypass the daemon and directly read/write config.toml
 
@@ -2608,11 +2859,15 @@ const server = http.createServer((req, res) => {
 '\n' +
 '  // ====== Inject "Manage Providers" button in settings menu ======\n' +
 '  var provBtnInjected = false;\n' +
+'  var floatingBtn = null;\n' +
 '  var injectionAttempts = 0;\n' +
+'  var MAX_INJECTION_ATTEMPTS = 200;\n' +
+'\n' +
 '  function injectProvidersButton() {\n' +
 '    if (provBtnInjected) return;\n' +
 '    injectionAttempts++;\n' +
-'    if (injectionAttempts > 100) { provBtnInjected = true; return; }\n' +
+'    if (injectionAttempts > MAX_INJECTION_ATTEMPTS) { provBtnInjected = true; return; }\n' +
+'\n' +
 '    // Strategy 1: Find any element with Sign Out / Logout text (case-insensitive)\n' +
 '    var allElements = document.querySelectorAll("button, [role=button], a, span, div, li");\n' +
 '    for (var i = 0; i < allElements.length; i++) {\n' +
@@ -2645,8 +2900,10 @@ const server = http.createServer((req, res) => {
 '      container.insertBefore(nb, el);\n' +
 '      provBtnInjected = true;\n' +
 '      pLog("Providers button injected near sign-out");\n' +
+'      ensureFloatingButton();\n' +
 '      return;\n' +
 '    }\n' +
+'\n' +
 '    // Strategy 2: Find gear/cog SVG icons (settings button)\n' +
 '    if (!provBtnInjected) {\n' +
 '      var svgs = document.querySelectorAll("svg");\n' +
@@ -2669,21 +2926,83 @@ const server = http.createServer((req, res) => {
 '        parent.insertBefore(nb, btn.nextSibling);\n' +
 '        provBtnInjected = true;\n' +
 '        pLog("Providers button injected near gear icon");\n' +
+'        ensureFloatingButton();\n' +
 '        break;\n' +
 '      }\n' +
 '    }\n' +
+'\n' +
+'    // Strategy 3: Find sidebar navigation and inject there\n' +
+'    if (!provBtnInjected) {\n' +
+'      var sidebars = document.querySelectorAll("nav, aside, [class*=sidebar], [class*=nav], [class*=menu]");\n' +
+'      for (var i = 0; i < sidebars.length; i++) {\n' +
+'        var sb = sidebars[i];\n' +
+'        if (sb.querySelector(".kimi-prov-injected-btn")) continue;\n' +
+'        var links = sb.querySelectorAll("a, button, [role=button]");\n' +
+'        if (links.length >= 2) {\n' +
+'          var nb = document.createElement("button");\n' +
+'          nb.type = "button";\n' +
+'          nb.className = "kimi-prov-injected-btn";\n' +
+'          nb.textContent = "⚙ Providers";\n' +
+'          Object.assign(nb.style, {\n' +
+'            cursor:"pointer",width:"100%",textAlign:"left",fontSize:"13px",fontWeight:"500",\n' +
+'            background:"transparent",color:"var(--accent-color,#6c5ce7)",\n' +
+'            border:"none",padding:"10px 16px",borderRadius:"6px"\n' +
+'          });\n' +
+'          nb.onmouseover = function(){this.style.background="rgba(108,92,231,0.1)";};\n' +
+'          nb.onmouseout = function(){this.style.background="transparent";};\n' +
+'          nb.onclick = function(ev){ev.preventDefault();ev.stopPropagation();window.openProviderSettings();};\n' +
+'          sb.insertBefore(nb, links[0]);\n' +
+'          provBtnInjected = true;\n' +
+'          pLog("Providers button injected in sidebar");\n' +
+'          ensureFloatingButton();\n' +
+'          return;\n' +
+'        }\n' +
+'      }\n' +
+'    }\n' +
+'\n' +
+'    // Strategy 4: Inject into any dropdown/modal/settings panel that appears\n' +
+'    if (!provBtnInjected) {\n' +
+'      var panels = document.querySelectorAll("[class*=dropdown], [class*=menu], [class*=panel], [class*=dialog], [class*=popover], [role=menu], [role=dialog]");\n' +
+'      for (var i = 0; i < panels.length; i++) {\n' +
+'        var panel = panels[i];\n' +
+'        if (panel.querySelector(".kimi-prov-injected-btn")) continue;\n' +
+'        var panelLinks = panel.querySelectorAll("button, a, [role=button]");\n' +
+'        if (panelLinks.length > 0 && !panel.closest(".kimi-prov-injected-btn")) {\n' +
+'          var sep = document.createElement("hr");\n' +
+'          sep.style.cssText = "border:none;border-top:1px solid #333;margin:4px 0";\n' +
+'          var nb = document.createElement("button");\n' +
+'          nb.type = "button";\n' +
+'          nb.className = "kimi-prov-injected-btn";\n' +
+'          nb.textContent = "Providers";\n' +
+'          Object.assign(nb.style, {\n' +
+'            cursor:"pointer",width:"100%",textAlign:"left",fontSize:"13px",fontWeight:"500",\n' +
+'            background:"transparent",color:"var(--accent-color,#6c5ce7)",\n' +
+'            border:"none",padding:"6px 12px",borderRadius:"4px"\n' +
+'          });\n' +
+'          nb.onmouseover = function(){this.style.background="rgba(108,92,231,0.1)";};\n' +
+'          nb.onmouseout = function(){this.style.background="transparent";};\n' +
+'          nb.onclick = function(ev){ev.preventDefault();ev.stopPropagation();window.openProviderSettings();};\n' +
+'          panel.insertBefore(sep, panelLinks[0]);\n' +
+'          panel.insertBefore(nb, panelLinks[0]);\n' +
+'          provBtnInjected = true;\n' +
+'          pLog("Providers button injected in menu panel");\n' +
+'          ensureFloatingButton();\n' +
+'          return;\n' +
+'        }\n' +
+'      }\n' +
+'    }\n' +
+'\n' +
 '    ensureFloatingButton();\n' +
 '  }\n' +
 '\n' +
-'  var floatingBtn = null;\n' +
 '  function ensureFloatingButton() {\n' +
-'    if (floatingBtn) return;\n' +
+'    if (floatingBtn && document.body.contains(floatingBtn)) return;\n' +
 '    floatingBtn = document.createElement("button");\n' +
 '    floatingBtn.id = "kimi-floating-prov-btn";\n' +
 '    floatingBtn.title = "Manage Providers (Ctrl+Shift+P)";\n' +
 '    floatingBtn.innerHTML = \'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>\';\n' +
 '    Object.assign(floatingBtn.style, {\n' +
-'      position:"fixed",bottom:"76px",right:"20px",zIndex:"99999",\n' +
+'      position:"fixed",bottom:"76px",right:"20px",zIndex:"2147483647",\n' +
 '      width:"44px",height:"44px",borderRadius:"50%",\n' +
 '      background:"#6c5ce7",color:"#fff",border:"none",\n' +
 '      cursor:"pointer",boxShadow:"0 2px 12px rgba(108,92,231,0.5)",\n' +
@@ -2693,7 +3012,11 @@ const server = http.createServer((req, res) => {
 '    floatingBtn.onmouseover = function(){this.style.transform="scale(1.1)";this.style.boxShadow="0 4px 20px rgba(108,92,231,0.7)";};\n' +
 '    floatingBtn.onmouseout = function(){this.style.transform="scale(1)";this.style.boxShadow="0 2px 12px rgba(108,92,231,0.5)";};\n' +
 '    floatingBtn.onclick = function(){window.openProviderSettings();};\n' +
-'    document.body.appendChild(floatingBtn);\n' +
+'    if (document.body) {\n' +
+'      document.body.appendChild(floatingBtn);\n' +
+'    } else {\n' +
+'      document.addEventListener("DOMContentLoaded", function(){document.body.appendChild(floatingBtn);});\n' +
+'    }\n' +
 '  }\n' +
 '\n' +
 '  // ====== Keyboard shortcut: Ctrl+Shift+P ======\n' +
@@ -2704,15 +3027,19 @@ const server = http.createServer((req, res) => {
 '    }\n' +
 '  });\n' +
 '\n' +
-'  // MutationObserver for dynamic settings panel\n' +
+'  // MutationObserver for dynamic settings panel — check every DOM change\n' +
 '  var obs = new MutationObserver(function(){injectProvidersButton();});\n' +
-'  obs.observe(document.body, {childList:true, subtree:true, attributes:false});\n' +
+'  if (document.body) {\n' +
+'    obs.observe(document.body, {childList:true, subtree:true, attributes:false});\n' +
+'  } else {\n' +
+'    document.addEventListener("DOMContentLoaded", function(){obs.observe(document.body, {childList:true, subtree:true, attributes:false});});\n' +
+'  }\n' +
 '  var injectTimer = setInterval(function(){\n' +
 '    injectProvidersButton();\n' +
 '    if (provBtnInjected) clearInterval(injectTimer);\n' +
-'  }, 1500);\n' +
-'  // Show floating button immediately (no delay)\n' +
-'  if (document.body) { ensureFloatingButton(); } else { document.addEventListener("DOMContentLoaded", ensureFloatingButton); }\n' +
+'  }, 1000);\n' +
+'  // Show floating button immediately\n' +
+'  ensureFloatingButton();\n' +
 '\n' +
 '  // Also expose to window for debugging\n' +
 '  window.__kimiProviders = {\n' +
@@ -2720,6 +3047,7 @@ const server = http.createServer((req, res) => {
 '    reload: reloadProviders,\n' +
 '    modal: openProvidersFull\n' +
 '  };\n' +
+'  pLog("Provider injection initialized — watching DOM");\n' +
 '})();\n' +
 '</script>';
           // WS redirect, workspace scripts, and provider fix — original Kimi Code UI preserved
@@ -2920,18 +3248,34 @@ server.on('upgrade', (req, socket, head) => {
       }
     });
 
-    // Timeout for the upgrade handshake (10s to handle daemon being slow)
-    setTimeout(() => {
+    // Timeout for the upgrade handshake (15s to handle daemon being slow to start)
+    const handshakeTimer = setTimeout(() => {
       if (!responseComplete) {
-        log('❌ WebSocket upgrade handshake timeout (5s)');
+        log('❌ WebSocket upgrade handshake timeout (15s)');
         if (clientId) delete activeWsConnections[clientId];
         try { socket.destroy(); } catch(e) {}
         try { proxySocket.destroy(); } catch(e) {}
       }
-    }, 5000);
+    }, 15000);
+    // Store timer so reconnect can cancel it
+    if (clientId) {
+      if (!activeWsConnections[clientId]) activeWsConnections[clientId] = {};
+      activeWsConnections[clientId].timer = handshakeTimer;
+    }
   });
 
   proxySocket.on('error', (err) => {
+    // ECONNREFUSED means daemon isn't ready yet — retry gracefully
+    if (err.code === 'ECONNREFUSED' || err.message.includes('ECONNREFUSED')) {
+      log(`⏳ Daemon not ready (ECONNREFUSED) — browser will auto-reconnect`);
+      daemonAlive = false;
+      if (clientId) {
+        delete activeWsConnections[clientId];
+        // Browser's built-in WS reconnection will retry automatically
+      }
+      try { socket.destroy(); } catch(e) {}
+      return;
+    }
     log(`❌ WebSocket TCP error: ${err.message}`);
     daemonAlive = false;
     if (clientId) delete activeWsConnections[clientId];
@@ -3022,3 +3366,4 @@ process.on('SIGTERM', () => {
   }
   setTimeout(() => process.exit(0), 3000);
 });
+
