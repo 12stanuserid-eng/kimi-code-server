@@ -169,7 +169,7 @@ async def chat_completion(req: ChatRequest, user=Depends(verify_api_key)):
         async with httpx.AsyncClient(timeout=60.0) as client:
             payload = {
                 "model": req.model,
-                "messages": [m.dict() for m in req.messages],
+                "messages": [m.model_dump() for m in req.messages],
                 "stream": req.stream
             }
             if req.max_tokens: payload["max_tokens"] = req.max_tokens
@@ -206,7 +206,7 @@ async def chat_completion(req: ChatRequest, user=Depends(verify_api_key)):
 @app.post("/v1/providers")
 def add_provider(provider: ModelProvider, user=Depends(verify_api_key)):
     pid = f"prov_{uuid.uuid4().hex[:8]}"
-    providers_db[pid] = provider.dict()
+    providers_db[pid] = provider.model_dump()
     return {"id": pid, "name": provider.name, "models": provider.models}
 
 @app.get("/v1/providers")
