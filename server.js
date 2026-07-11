@@ -2334,6 +2334,59 @@ loadProviders();
     return;
   }
 
+  // GET /kimi-admin/pg-info — PostgreSQL connection info
+  if (req.url === '/kimi-admin/pg-info' && req.method === 'GET') {
+    const pgInfo = {
+      success: true,
+      database: 'kimi_postgres',
+      user: 'kimi_postgres_user',
+      host: 'dpg-d98sd9jtqb8s739mee80-a.oregon-postgres.render.com',
+      port: 5432,
+      internal_host: 'dpg-d98sd9jtqb8s739mee80-a',
+      external_connection_string: 'postgresql://kimi_postgres_user:TXIdRdDqyyHVfDoxXIVRUGDYGLTCzMoL@dpg-d98sd9jtqb8s739mee80-a.oregon-postgres.render.com:5432/kimi_postgres',
+      internal_connection_string: 'postgresql://kimi_postgres_user:TXIdRdDqyyHVfDoxXIVRUGDYGLTCzMoL@dpg-d98sd9jtqb8s739mee80-a/kimi_postgres',
+      psql_command: 'PGPASSWORD=TXIdRdDqyyHVfDoxXIVRUGDYGLTCzMoL psql -h dpg-d98sd9jtqb8s739mee80-a.oregon-postgres.render.com -p 5432 -U kimi_postgres_user -d kimi_postgres',
+      note: 'External connections require SSL (sslmode=require). Free tier may need IP allowlist.',
+      created_at: '2026-07-11',
+      plan: 'free (1GB, expires 2026-08-10)'
+    };
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    return res.end(JSON.stringify(pgInfo, null, 2));
+  }
+
+  // POST /kimi-admin/pg-test — test PostgreSQL connection from within Render
+  if (req.url === '/kimi-admin/pg-test' && req.method === 'POST') {
+    const { spawn } = require('child_process');
+    const testQuery = "SELECT current_database() as db, version() as ver, now() as time";
+    const child = spawn('psql', [
+      '-h', 'dpg-d98sd9jtqb8s739mee80-a',
+      '-U', 'kimi_postgres_user',
+      '-d', 'kimi_postgres',
+      '-c', testQuery,
+      '-t', '-A'
+    ], {
+      env: { ...process.env, PGPASSWORD: 'TXIdRdDqyyHVfDoxXIVRUGDYGLTCzMoL' },
+      timeout: 10000
+    });
+    let output = '';
+    child.stdout.on('data', d => output += d);
+    child.stderr.on('data', d => output += d);
+    child.on('close', (code) => {
+      res.writeHead(code === 0 ? 200 : 500, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({
+        success: code === 0,
+        exit_code: code,
+        output: output.trim(),
+        message: code === 0 ? 'PostgreSQL connection OK' : 'Connection failed'
+      }));
+    });
+    child.on('error', (e) => {
+      res.writeHead(500, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    });
+    return;
+  }
+
   // POST /kimi-admin/backup-restore — restore from latest backup
   // Optional query: ?source=pentaract (force Pentaract) or ?source=local (force local)
   if (req.url.startsWith('/kimi-admin/backup-restore') && req.method === 'POST') {
